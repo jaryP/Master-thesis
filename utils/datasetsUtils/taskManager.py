@@ -1,3 +1,4 @@
+from collections import defaultdict
 from abc import ABC, abstractmethod
 
 

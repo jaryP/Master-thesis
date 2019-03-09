@@ -1,16 +1,14 @@
-import pickle
-import shutil
+from torch.utils.data import BatchSampler, RandomSampler
+import utils.datasetsUtils.dataset
+from utils.datasetsUtils.taskManager import AbstractTaskDecorator, NoTask, SingleTargetClassificationTask
 import tarfile
 import urllib.request
+import shutil
 from os.path import join
-
+import pickle
 import numpy as np
-import torch
 from PIL import Image
-from torch.utils.data import BatchSampler, RandomSampler
-
-import utils.datasetsUtils.dataset
-from utils.datasetsUtils.taskManager import AbstractTaskDecorator, NoTask
+import torch
 
 
 class Cifar10(utils.datasetsUtils.dataset.GeneralDatasetLoader):
