@@ -1,5 +1,7 @@
-from networks.ActivationFunctions import KAF, elu
 import torch.nn as nn
+
+from networks.ActivationFunctions import KAF, elu
+
 
 class KAFCNN(nn.Module):
 

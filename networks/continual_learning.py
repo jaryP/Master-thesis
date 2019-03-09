@@ -1,8 +1,10 @@
-import torch.nn as nn
 from copy import deepcopy
+
+import torch.nn as nn
+import torch.nn.functional as F
+
 from configs.configs import DefaultConfig
 from utils.datasetsUtils.dataset import GeneralDatasetLoader
-import torch.nn.functional as F
 
 
 class EWC(object):

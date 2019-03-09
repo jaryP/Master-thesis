@@ -1,9 +1,8 @@
-import warnings
-
-import torch
-from torch.utils.data import Dataset
-from abc import ABC, abstractmethod
 import os
+import warnings
+from abc import ABC, abstractmethod
+
+from torch.utils.data import Dataset
 
 
 class GeneralDatasetLoader(ABC, Dataset):

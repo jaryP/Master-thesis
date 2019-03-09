@@ -1,11 +1,12 @@
+import random
+
+import torch.nn.functional as F
+from torch import nn, optim, sum, abs
 from tqdm import tqdm
 
 from configs import configs
 from networks.continual_learning import EWC
 from utils.datasetsUtils.dataset import GeneralDatasetLoader
-import torch.nn.functional as F
-from torch import nn, optim, sum, abs
-import random
 from utils.metrics import calculate_all_metrics
 
 
@@ -178,7 +179,7 @@ class Trainer:
 if __name__ == '__main__':
     from networks import NoKafnet
     import utils.datasetsUtils.CIFAR as CIFAR
-    from utils.datasetsUtils.taskManager import SingleTargetClassificationTask, NoTask
+    from utils.datasetsUtils.taskManager import SingleTargetClassificationTask
     from configs.configs import DefaultConfig
     from torchvision.transforms import transforms
 
