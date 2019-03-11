@@ -1,12 +1,11 @@
 from tqdm import tqdm
-
 from configs import configs
 from networks.continual_learning import EWC
 from utils.datasetsUtils.dataset import GeneralDatasetLoader
 import torch.nn.functional as F
 from torch import nn, optim, sum, abs
 import random
-from utils.metrics import calculate_all_metrics
+from utils.metrics import MetricsHolder
 
 
 class Trainer:
@@ -17,7 +16,7 @@ class Trainer:
         self.model = model
 
         if config.USE_EWC:
-            self.ewc = EWC(self.model, self.dataset, config)
+            self.ewc = EWC(self.model, config)
         else:
             self.ewc = None
 
@@ -36,78 +35,67 @@ class Trainer:
         else:
             raise ValueError('Not known optimizer, allowed ones are: SGD')
 
+        self.metrics_holder = MetricsHolder(self.dataset.tasks_number)
+
     def single_task(self, task=0):
         losses = []
-        metrics = []
 
         self.dataset.task = task
 
         for e in range(self.config.EPOCHS):
             loss = self.epoch(e)
             losses.append(loss)
+            self.evaluate()
 
-            m = self.evaluate()
-            metrics.append(m)
+        m = self.metrics_holder.metrics
+        m['losses'] = losses
 
-        return losses, metrics
+        return m
 
     def all_tasks(self, limit=-1):
 
         has_next_task = True
-        results = dict()
-        current_task = 0
+        losses_dict = dict()
 
         while has_next_task:
 
             current_task = self.dataset.task
+            self.model.task = current_task
 
-            if limit > 0 and current_task >= limit:
+            if 0 < limit <= current_task:
                 break
 
             losses = []
-            metrics = []
 
             if (current_task > 0) and self.ewc is not None:
-                # If we want EWC and it is at least the second task, sample the previous datasetsUtils
                 old_tasks = []
                 for sub_task in range(current_task):
-
-                    self.dataset.task = sub_task
                     self.dataset.train_phase()
-                    it = self.dataset.getIterator(self.config.EWC_SAMPLE_SIZE)
-
+                    it = self.dataset.getIterator(self.config.EWC_SAMPLE_SIZE, task=sub_task)
                     images, _ = next(it)
-
                     old_tasks.extend([(images[i], sub_task) for i in range(len(images))])
 
                 old_tasks = random.sample(old_tasks, k=self.config.EWC_SAMPLE_SIZE)
                 self.ewc = self.ewc(old_tasks=old_tasks)
 
-            self.dataset.task = current_task
-
             for e in range(self.config.EPOCHS):
                 loss = self.epoch(e)
                 losses.append(loss)
+                self.evaluate()
 
-                m = self.evaluate()
-                metrics.append(m)
+            for sub_task in range(self.dataset.tasks_number):
+                if sub_task == current_task:
+                    continue
+                self.evaluate(evaluated_task=sub_task)
 
-                if current_task > 0:
-                    for sub_task in range(current_task):
-                        self.dataset.task = sub_task
-                        m = self.evaluate()
-                        r = results[sub_task]
-                        m_old = r['metrics']
-                        m_old.append(m)
-                        results[sub_task]['metrics'] = m_old
-
-                self.dataset.task = current_task
-
-            results[current_task] = {'losses': losses, 'metrics': metrics}
+                losses_dict[current_task] = losses
 
             has_next_task = self.dataset.next_task(round_robin=False)
 
-        return results
+        m = self.metrics_holder.metrics
+        # m['losses'] = losses_dict
+
+        return m, losses_dict
 
     def epoch(self, n):
         self.model.train()
@@ -148,14 +136,17 @@ class Trainer:
 
         return epoch_loss_full/i
 
-    def evaluate(self):
+    def evaluate(self, evaluated_task=None):
+
         self.dataset.test_phase()
         self.model.eval()
 
         i = 0
 
-        it = tqdm(self.dataset.getIterator(self.config.BATCH_SIZE), total=len(self.dataset)//self.config.BATCH_SIZE)
-        it.set_description("Testing task {}".format(self.dataset.task))
+        it = tqdm(self.dataset.getIterator(self.config.BATCH_SIZE, task=evaluated_task),
+                  total=len(self.dataset)//self.config.BATCH_SIZE)
+        it.set_description("Testing task {}".format(evaluated_task
+                                                    if evaluated_task is not None else self.dataset.task))
 
         y_true = []
         y_pred = []
@@ -164,16 +155,18 @@ class Trainer:
             x, y = x.to(self.config.DEVICE), \
                    y.to(self.config.DEVICE)
 
-            y_pred_np = self.model.eval_forward(self.model(x))
+            y_pred_np = self.model.eval_forward(x, evaluated_task)
             y_true_np = y.cpu().detach().numpy()
 
             y_true.extend(y_true_np)
             y_pred.extend(y_pred_np)
+
             i += 1
 
             it.set_postfix({'batch#': i})
 
-        return calculate_all_metrics(y_true, y_pred)
+        self.metrics_holder.add_evaluation(evaluated_task=evaluated_task, current_task=self.dataset.task,
+                                           y_pred=y_pred, y_true=y_true)
 
 
 if __name__ == '__main__':
@@ -193,12 +186,14 @@ if __name__ == '__main__':
     dataset.load_dataset()
 
     net = NoKafnet.CNN(dataset.tasks_number)
+
     config = DefaultConfig()
     config.EPOCHS = 1
     config.L1_REG = 0
+    config.USE_EWC = False
 
     trainer = Trainer(net, dataset, config)
-    a = trainer.all_tasks(3)
+    a = trainer.all_tasks()
     print(a)
 
     # config.USE_EWC = False

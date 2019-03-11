@@ -1,6 +1,4 @@
 import warnings
-
-import torch
 from torch.utils.data import Dataset
 from abc import ABC, abstractmethod
 import os
@@ -69,6 +67,15 @@ class GeneralDatasetLoader(ABC, Dataset):
     def phase(self):
         return self._phase
 
+    @phase.setter
+    def phase(self, value):
+        if value in ['train', 'test']:
+            self._phase = value
+
+    @phase.getter
+    def phase(self):
+        return self._phase
+
     @property
     def task(self):
         return self._current_task
@@ -84,7 +91,7 @@ class GeneralDatasetLoader(ABC, Dataset):
         return self._current_task
 
     @abstractmethod
-    def getIterator(self, batch_size):
+    def getIterator(self, batch_size, task=None):
         raise NotImplementedError
 
     @abstractmethod
@@ -101,7 +108,6 @@ class GeneralDatasetLoader(ABC, Dataset):
         raise NotImplementedError
 
     def already_downloaded(self):
-        print(self.download_path)
         if not os.path.exists(self.download_path):
             os.makedirs(self.download_path)
             return False

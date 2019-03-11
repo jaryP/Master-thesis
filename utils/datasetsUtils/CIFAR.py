@@ -75,14 +75,17 @@ class Cifar10(utils.datasetsUtils.dataset.GeneralDatasetLoader):
     def __len__(self):
         return len(self.task2idx[self._current_task][self._phase]['x'])
 
-    def getIterator(self, batch_size):
+    def getIterator(self, batch_size, task=None):
+
+        if task is None:
+            task = self.task
 
         class CustomIterator:
             def __init__(self, outer_dataset):
 
                 self.cifar = outer_dataset
                 self.sampler = BatchSampler(RandomSampler(range(len(outer_dataset.task2idx
-                                                                    [outer_dataset.task]
+                                                                    [task]
                                                                     [outer_dataset.phase]
                                                                     ['x']))),
                                             batch_size, False)
@@ -175,9 +178,9 @@ class Cifar10(utils.datasetsUtils.dataset.GeneralDatasetLoader):
 
     def download_dataset(self):
 
-        if not self.force_download:
-            if self.already_downloaded():
-                return
+        downloaded = self.already_downloaded()
+        if not self.force_download and downloaded:
+            return
 
         with urllib.request.urlopen(self.url) as response, open(join(self.download_path, self.filename),
                                                                 'wb') as out_file:

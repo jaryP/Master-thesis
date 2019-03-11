@@ -19,7 +19,7 @@ class SingleTargetClassificationTask(AbstractTaskDecorator):
     @staticmethod
     def process_idx(x, groud_truth_labels):
 
-        labels_set = set(groud_truth_labels)
+        labels_set = set(list(groud_truth_labels))
         idx_per_task = dict()
 
         indexes = list(range(len(groud_truth_labels)))

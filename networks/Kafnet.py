@@ -1,10 +1,16 @@
 from networks.ActivationFunctions import KAF, elu
+from networks.net import AbstractNetwork
 import torch.nn as nn
 
-class KAFCNN(nn.Module):
+
+class KAFCNN(AbstractNetwork):
 
     def __init__(self, num_tasks):
         super(KAFCNN, self).__init__()
+        self._n_tasks = num_tasks
+        self.build_net(num_tasks)
+
+    def build_net(self, num_task):
         self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
         self.batchnorm1 = nn.BatchNorm2d(32)
         self.maxpool = nn.MaxPool2d(kernel_size=(2, 2), stride=2)
@@ -18,21 +24,18 @@ class KAFCNN(nn.Module):
         self.kaf2 = KAF(52, init_fcn=elu, is_conv=True, D=15)
         self.kaf3 = KAF(52, init_fcn=elu, is_conv=True, D=15)
         self.kaf4 = KAF(96, init_fcn=elu, is_conv=True, D=15)
-        # self.kaf5 = KAF(96, init_fcn=elu, is_conv=True)
-        self.output = nn.Linear(1536, num_tasks * 2)
-        self.current_task = 0
+        self.output = nn.Linear(1536, num_task * 2)
 
-    def forward(self, input):
+    def forward(self, input, task=None):
+        if task is None:
+            task = self.task
         x = self.kaf1(self.batchnorm1(self.conv1(input)))
         x = self.kaf2(self.batchnorm2(self.conv2(x)))
         x = self.maxpool(self.kaf3(self.batchnorm3(self.conv3(x))))
         x = self.kaf4(self.batchnorm4(self.conv4(x)))
-        # x = self.maxpool(self.kaf5(self.batchnorm5(self.conv5(x))))
         x = self.output(x.reshape(input.shape[0], -1))
-        return x[:, self.current_task * 2:self.current_task * 2 + 2]
+        return x[:, task * 2: task * 2 + 2]
 
-    def set_task(self, task):
-        self.current_task = task
-
-    def eval_forward(self, x):
+    def eval_forward(self, x, task=None):
+        x = self.forward(x, task=task)
         return (nn.functional.softmax(x, dim=1).max(dim=1)[1]).cpu().detach().numpy()
