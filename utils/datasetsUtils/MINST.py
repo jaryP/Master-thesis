@@ -2,14 +2,13 @@ import gzip
 import codecs
 from torch.utils.data import BatchSampler, RandomSampler
 import utils.datasetsUtils.dataset
-from utils.datasetsUtils.taskManager import AbstractTaskDecorator, NoTask, SingleTargetClassificationTask
+from utils.datasetsUtils.taskManager import AbstractTaskDecorator, NoTask, DuplicatetNoTask
 import urllib.request
 import shutil
 from os.path import join
-import pickle
 import numpy as np
-from PIL import Image
 import torch
+import random
 
 
 class MINST(utils.datasetsUtils.dataset.GeneralDatasetLoader):
@@ -32,6 +31,10 @@ class MINST(utils.datasetsUtils.dataset.GeneralDatasetLoader):
         self.unzipped_folder = ''
 
         self.transform = transform
+
+        # if transform is None:
+        #     self.transform = transforms.Compose([transforms.ToTensor()])
+
         self.target_transform = target_transform
 
         self._phase = 'train'
@@ -54,11 +57,20 @@ class MINST(utils.datasetsUtils.dataset.GeneralDatasetLoader):
 
     def __getitem__(self, index):
 
-        t = self.task2idx[self._current_task][self._phase]
+        if isinstance(index, list) or isinstance(index, tuple):
+            index, task = index
+        else:
+            task = self.task
+
+        t = self.task2idx[task][self._phase]
         img = self.X[t['x'][index]]
         target = t['y'][index]
 
-        img = Image.fromarray(img)
+        # img = Image.fromarray(img.numpy(), mode='L')
+        img = torch.from_numpy(np.array(img, copy=False, dtype=np.float)).float()
+
+        # if len(list(img.size())) < 3:
+        #     img = img.unsqueeze(0)
 
         if self.transform is not None:
             img = self.transform(img)
@@ -72,9 +84,6 @@ class MINST(utils.datasetsUtils.dataset.GeneralDatasetLoader):
             target = self.target_transform(target)
         else:
             target = torch.from_numpy(target)
-
-        if len(list(img.size())) < 4:
-            img = img.unsqueeze(0)
 
         return img, target
 
@@ -101,12 +110,13 @@ class MINST(utils.datasetsUtils.dataset.GeneralDatasetLoader):
                     x = []
                     y = []
                     for i in batch_idx:
-                        xc, yc = self.minst[i]
+                        xc, yc = self.minst[(i, task)]
                         x.append(xc)
                         y.append(yc)
 
-                    x = torch.squeeze(torch.stack(x), 1)
-                    y = torch.squeeze(torch.stack(y), 1)
+                    x = torch.stack(x)
+                    y = torch.stack(y)
+                    y = y.squeeze(1)
 
                     yield x, y
 
@@ -161,17 +171,19 @@ class MINST(utils.datasetsUtils.dataset.GeneralDatasetLoader):
             Y.extend(l)
 
         X = np.vstack(X)
+        X = np.reshape(X, (-1, X.shape[1]*X.shape[2]))
+
+        # X = X.transpose((0, 2, 3, 1))
         labels = set([i for i in Y])
 
         self.class_to_idx = {_class: i for i, _class in enumerate(labels)}
         self.idx_to_class = {_class: i for i, _class in enumerate(labels)}
 
         self.X, self.Y = X, Y
-        x_indexes = range(len(X))
         if self.task_manager is not None:
-            task_map = self.task_manager.process_idx(x_indexes, Y)
+            task_map = self.task_manager.process_idx(ground_truth_labels=Y)
         else:
-            task_map = NoTask().process_idx(x_indexes, Y)
+            task_map = NoTask().process_idx(ground_truth_labels=Y)
 
         self.task2idx = self.train_test_split(task_map)
         self._n_tasks = len(self.task2idx)
@@ -221,59 +233,52 @@ class MINST(utils.datasetsUtils.dataset.GeneralDatasetLoader):
 
 
 class PermutedMINST(MINST):
-
-    def __init__(self, folder: str, task_manager: AbstractTaskDecorator, train_split: float = 0.9,
+    def __init__(self, folder: str, train_split: float = 0.9,
                  transform=None, target_transform=None, download=False,
-                 force_download=False, permuted_index=None):
+                 force_download=False, n_permutation=2):
 
-        super().__init__(folder, task_manager, train_split, transform, target_transform, download, force_download)
+        super().__init__(folder, DuplicatetNoTask(n_permutation), train_split, transform, target_transform, download, force_download)
+        self.permuted_index = []
+        self.n_permutation = n_permutation
+        self._n_task = n_permutation
 
-        self.url = \
-            [
-                'http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz',
-                'http://yann.lecun.com/exdb/mnist/train-labels-idx1-ubyte.gz',
-                'http://yann.lecun.com/exdb/mnist/t10k-images-idx3-ubyte.gz',
-                'http://yann.lecun.com/exdb/mnist/t10k-labels-idx1-ubyte.gz',
-            ]
+    def __getitem__(self, index):
 
-        self.filename = "cifar-10-python.tar.gz"
-        self.unzipped_folder = ''
+        if isinstance(index, list) or isinstance(index, tuple):
+            index, task = index
+        else:
+            task = self.task
 
-        self.transform = transform
-        self.target_transform = target_transform
+        t = self.task2idx[task][self._phase]
+        img = self.X[t['x'][index]]
+        img = img[self.permuted_index[task]]
+        target = t['y'][index]
 
-        self._phase = 'train'
-        self._current_task = 0
+        img = torch.from_numpy(np.array(img, copy=False)).float()
 
-        self.download = download
-        self.force_download = force_download
+        if self.transform is not None:
+            img = self.transform(img)
 
-        self.train_split = train_split
+        if isinstance(target, int):
+            target = [target]
 
-        self.task_manager = task_manager
-        self.permuted_index = permuted_index
+        target = np.asarray(target, dtype=np.int64)
 
-        self.X, self.Y, self.class2idx, self.idx2class = None, None, None, None
-        self.task2idx = None
-        self.task_map = None
-        self._n_tasks = None
-        self.class_to_idx = None
-        self.idx_to_class = None
-        self._n_classes = 0
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+        else:
+            target = torch.from_numpy(target)
+
+        return img, target
 
     def load_dataset(self):
         super().load_dataset()
-        shape = self.X[0].shape
 
-        if self.permuted_index is None:
-            self.permuted_index = np.random.randint(shape[0]*shape[1])
+        self.X = [x/255 for x in self.X]
+        shape = self.X[0].shape[0]
 
-        row = self.permuted_index // shape[0]
-        column = self.permuted_index - row * shape[0]
+        idx = list(range(shape))
 
-        self.X = [img[row, column] / 255 for img in self.X]
-
-
-minst = PermutedMINST('../../data/minst', SingleTargetClassificationTask, permuted_index=60)
-minst.load_dataset()
-
+        for i in range(self.n_permutation):
+            random.shuffle(idx)
+            self.permuted_index.append([idx.copy()])

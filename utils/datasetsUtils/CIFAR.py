@@ -1,6 +1,6 @@
 from torch.utils.data import BatchSampler, RandomSampler
 import utils.datasetsUtils.dataset
-from utils.datasetsUtils.taskManager import AbstractTaskDecorator, NoTask, SingleTargetClassificationTask
+from utils.datasetsUtils.taskManager import AbstractTaskDecorator, NoTask
 import tarfile
 import urllib.request
 import shutil
@@ -46,11 +46,16 @@ class Cifar10(utils.datasetsUtils.dataset.GeneralDatasetLoader):
 
     def __getitem__(self, index):
 
-        t = self.task2idx[self._current_task][self._phase]
+        if isinstance(index, list) or isinstance(index, tuple):
+            index, task = index
+        else:
+            task = self._current_task
+
+        t = self.task2idx[task][self._phase]
         img = self.X[t['x'][index]]
         target = t['y'][index]
 
-        img = Image.fromarray(img)
+        img = Image.fromarray(img, mode='RGB')
 
         if self.transform is not None:
             img = self.transform(img)
@@ -77,15 +82,17 @@ class Cifar10(utils.datasetsUtils.dataset.GeneralDatasetLoader):
 
     def getIterator(self, batch_size, task=None):
 
-        if task is None:
-            task = self.task
-
         class CustomIterator:
             def __init__(self, outer_dataset):
 
                 self.cifar = outer_dataset
+                if task is not None:
+                    self.t = task
+                else:
+                    self.t = outer_dataset.task
+
                 self.sampler = BatchSampler(RandomSampler(range(len(outer_dataset.task2idx
-                                                                    [task]
+                                                                    [self.t]
                                                                     [outer_dataset.phase]
                                                                     ['x']))),
                                             batch_size, False)
@@ -95,7 +102,7 @@ class Cifar10(utils.datasetsUtils.dataset.GeneralDatasetLoader):
                     x = []
                     y = []
                     for i in batch_idx:
-                        xc, yc = self.cifar[i]
+                        xc, yc = self.cifar[(i, self.t)]
                         x.append(xc)
                         y.append(yc)
 
@@ -144,12 +151,10 @@ class Cifar10(utils.datasetsUtils.dataset.GeneralDatasetLoader):
 
         self.X, self.Y = X, Y
 
-        x_indexes = range(len(X))
-
         if self.task_manager is not None:
-            task_map = self.task_manager.process_idx(x_indexes, Y)
+            task_map = self.task_manager.process_idx(ground_truth_labels=Y)
         else:
-            task_map = NoTask().process_idx(x_indexes, Y)
+            task_map = NoTask().process_idx(ground_truth_labels=Y)
 
         self.task2idx = self.train_test_split(task_map)
 
@@ -178,9 +183,9 @@ class Cifar10(utils.datasetsUtils.dataset.GeneralDatasetLoader):
 
     def download_dataset(self):
 
-        downloaded = self.already_downloaded()
-        if not self.force_download and downloaded:
-            return
+        if not self.force_download:
+            if self.already_downloaded():
+                return
 
         with urllib.request.urlopen(self.url) as response, open(join(self.download_path, self.filename),
                                                                 'wb') as out_file:
@@ -262,84 +267,4 @@ class Cifar100(Cifar10):
             print('task #{} with train {} and test {} images (label: {})'.format(t, len(d['train']), len(d['test']),
                                                                                  self.idx_to_class[t]))
 
-
-# if __name__ == '__main__':
-#     import torch
-#     from torch import nn, optim
-#     import torch.nn.functional as F
-#
-#     from torchvision import transforms
-#
-#     from torch import nn
-#     from torch.jit import trace
-#     import torch.nn.functional as F
-#
-#
-#     class CNN(torch.nn.Module):
-#         def __init__(self):
-#             super(CNN, self).__init__()
-#             self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
-#             self.batchnorm1 = nn.BatchNorm2d(32)
-#             self.maxpool1 = nn.MaxPool2d(kernel_size=(2, 2), stride=2)
-#             self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1, stride=2)
-#             self.batchnorm2 = nn.BatchNorm2d(64)
-#             self.conv3 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
-#             self.batchnorm3 = nn.BatchNorm2d(64)
-#             self.conv4 = nn.Conv2d(64, 128, kernel_size=3, padding=1, stride=2)
-#             self.batchnorm4 = nn.BatchNorm2d(128)
-#             self.output = nn.Linear(2048, c.tasks_number * 2)
-#             self.current_task = 0
-#
-#         def forward(self, input):
-#             x = F.relu(self.batchnorm1(self.conv1(input)))
-#             x = F.relu(self.batchnorm2(self.conv2(x)))
-#             x = self.maxpool1(F.relu(self.batchnorm3(self.conv3(x))))
-#             x = F.relu(self.batchnorm4(self.conv4(x)))
-#             x = self.output(x.reshape(input.shape[0], -1))
-#             return x[:, self.current_task * 2:self.current_task * 2 + 2]
-#
-#         def set_task(self, task):
-#             self.current_task = torch.tensor(task)
-#
-#     transform = transforms.Compose(
-#         [transforms.ToTensor(),
-#          transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))]
-#     )
-#
-#     c = Cifar100('../data/cifar100', SingleTargetClassificationTask(), download=True,
-#                       force_download=False, train_split=0.8, transform=transform, target_transform=None)
-#     c.load_dataset()
-#
-#     net = CNN().to(torch.device('cuda'))
-#     optimizer = optim.SGD(params=net.parameters(), lr=0.01)
-#     epoch_loss_full = 0
-#
-#     i = 0
-#
-#     # for input, target in c:
-#     #     input, target = input.to(torch.device('cuda')), target.to(torch.device('cuda'))
-#     #     optimizer.zero_grad()
-#     #     output = net(input)
-#     #     loss = F.cross_entropy(output, target)
-#     #     loss.backward()
-#     #     optimizer.step()
-#     #     i+=1
-#     #     epoch_loss_full += loss.detach().item()
-#     #     print(epoch_loss_full/i)
-#
-#     it = c.getIterator(12)
-#
-#     for input, target in it:
-#
-#         input, target = input.to(torch.device('cuda')), \
-#                         target.to(torch.device('cuda'))
-#
-#         optimizer.zero_grad()
-#         output = net(input)
-#         loss = F.cross_entropy(output, target)
-#         loss.backward()
-#         optimizer.step()
-#         i += 1
-#         epoch_loss_full += loss.detach().item()
-#         print(epoch_loss_full/i)
 

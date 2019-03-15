@@ -1,10 +1,10 @@
 import torch
-from torch import nn, optim, utils
+import networks.continual_learning as continual_learning
 
 
 class DefaultConfig(object):
     LR = 0.001
-    L1_REG = 1e-4
+    L1_REG = 0
 
     ITERS = 1
     EPOCHS = 2
@@ -14,6 +14,7 @@ class DefaultConfig(object):
     EWC_SAMPLE_SIZE = 250
     EWC_IMPORTANCE = 1000
     USE_EWC = True
+    EWC_TYPE = continual_learning.EWC
 
     USE_TENSORBOARD = True
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -23,11 +24,20 @@ class DefaultConfig(object):
     OPTIMIZER = 'SGD'
 
     def __str__(self):
-        fields = [a for a in dir(self) if not a.startswith('__') and not callable(getattr(self, a))]
+        fields = [a for a in dir(self) if not a.startswith('__')]
         s = 'CONFIG PARAMETERS\n'
         for f in fields:
             s += f+': '+str(getattr(self, f))+'\n'
         return s
+
+
+class OnlineLearningConfig(DefaultConfig):
+    EWC_TYPE = continual_learning.OnlineEWC
+    GAMMA = 1.0
+
+
+class RealEwc(DefaultConfig):
+    EWC_TYPE = continual_learning.RealEWC
 
 
 # class CONFIG_CIFAR10(DefaultConfig):

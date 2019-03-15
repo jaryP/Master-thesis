@@ -1,13 +1,43 @@
-
 import numpy as np
 import torch
 from torch.nn import Parameter
 from torch.nn.init import normal_
+from abc import ABC, abstractmethod
+import torch.nn as nn
 
 
 # ELU function (for initialization)
 def elu(s):
-  return np.maximum(0, s) + np.minimum(0, np.exp(s) - 1.0)
+    return np.maximum(0, s) + np.minimum(0, np.exp(s) - 1.0)
+
+
+class AbstractNetwork(ABC, nn.Module):
+    def __init__(self, outputs):
+        super().__init__()
+        self.output_size = outputs
+        self._task = 0
+
+    @abstractmethod
+    def build_net(self):
+        pass
+
+    @abstractmethod
+    def eval_forward(self, x):
+        pass
+
+    @property
+    def task(self):
+        return self._task
+
+    @task.setter
+    def task(self, value):
+        if value > self.output_size:
+            value = self.output_size
+        self._task = value
+
+    @task.getter
+    def task(self):
+        return self._task
 
 
 class KAF(torch.jit.ScriptModule):
@@ -78,4 +108,3 @@ class KAF(torch.jit.ScriptModule):
 
     def __repr__(self):
         return self.__class__.__name__ + ' (' + str(self.num_parameters) + ')'
-

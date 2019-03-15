@@ -31,7 +31,7 @@ class GeneralDatasetLoader(ABC, Dataset):
 
         self.task_manager = None
 
-        self.X, self.Y, self.class2idx, self.idx2class = None, None, None, None
+        self.X, self.Y, self.class_to_idx, self.idx_to_class = None, None, None, None
         self.task2idx = None
         self._n_tasks = None
         self.class_to_idx = None
@@ -67,15 +67,6 @@ class GeneralDatasetLoader(ABC, Dataset):
     def phase(self):
         return self._phase
 
-    @phase.setter
-    def phase(self, value):
-        if value in ['train', 'test']:
-            self._phase = value
-
-    @phase.getter
-    def phase(self):
-        return self._phase
-
     @property
     def task(self):
         return self._current_task
@@ -108,6 +99,7 @@ class GeneralDatasetLoader(ABC, Dataset):
         raise NotImplementedError
 
     def already_downloaded(self):
+        print(self.download_path)
         if not os.path.exists(self.download_path):
             os.makedirs(self.download_path)
             return False
