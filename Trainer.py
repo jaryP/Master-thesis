@@ -2,21 +2,31 @@ from tqdm import tqdm
 import configs.configClasses as configClasses
 from utils.datasetsUtils.dataset import GeneralDatasetLoader
 import torch.nn.functional as F
-from torch import optim, sum, abs
+from torch import optim, sum, abs, save, load
 from utils.metrics import MetricsHolder
 from networks.net_utils import AbstractNetwork
+from os.path import join, exists
+from os import makedirs
 
 
 class Trainer:
-    def __init__(self, model: AbstractNetwork, dataset: GeneralDatasetLoader, config: configClasses.DefaultConfig):
+    def __init__(self, model: AbstractNetwork, dataset: GeneralDatasetLoader, config: configClasses.DefaultConfig,
+                 save_modality=1):
 
         self.config = config
         self.dataset = dataset
         self.model = model
         self.metrics_calculator = MetricsHolder(self.dataset.tasks_number)
 
+        self.save_modality = save_modality
+        self.device = config.DEVICE
+
+        self.save_path = join(config.SAVE_PATH, config.MODEL_NAME)
+        if not exists(config.SAVE_PATH):
+            makedirs(config.SAVE_PATH)
+
         if config.DEVICE != 'cpu':
-            self.model.cuda(config.DEVICE)
+            self.model.cuda(self.device)
 
         if config.USE_EWC:
             self.ewc = config.EWC_TYPE(self.model, self.dataset, config)
@@ -45,7 +55,12 @@ class Trainer:
             losses.append(loss)
             self.evaluate()
 
-        return losses, self.metrics_calculator.metrics
+        if self.save_modality >= 1:
+            state = {'metrics': self.metrics_calculator.metrics, 'losses': losses,
+                     'model': self.model.state_dict()}
+            save(state, self.save_path + "_last")
+
+        return {'losses': losses, 'metrics': self.metrics_calculator.metrics}
 
     def all_tasks(self, limit=-1):
 
@@ -85,7 +100,32 @@ class Trainer:
             losses_per_task[current_task] = losses
             has_next_task = self.dataset.next_task(round_robin=False)
 
-        return losses_per_task, self.metrics_calculator.metrics
+            if self.save_modality == 2:
+                state_dict = {}
+                for k, v in self.model.state_dict().items():
+                    state_dict[k] = v.cpu()
+
+                m = self.metrics_calculator.metrics
+                state = {'metrics': m['metrics'], 'tasks': m['tasks'], 'losses': losses_per_task,
+                         'model': state_dict}
+
+                save(state, self.save_path+"_"+str(current_task))
+
+        if self.save_modality >= 1:
+            state_dict = {}
+            for k, v in self.model.state_dict().items():
+                state_dict[k] = v.cpu()
+
+            m = self.metrics_calculator.metrics
+            state = {'metrics': m['metrics'], 'tasks': m['tasks'], 'losses': losses_per_task,
+                     'model': state_dict}
+
+            save(state, self.save_path + "_last")
+
+        metrics = self.metrics_calculator.metrics
+        metrics['losses'] = losses_per_task
+
+        return metrics
 
     def epoch(self, n):
         self.model.train()
@@ -160,6 +200,17 @@ class Trainer:
             it.set_postfix({'batch#': i})
 
         self.metrics_calculator.add_evaluation(evaluated_task, self.dataset.task, y_true=y_true, y_pred=y_pred)
+
+    def load(self, task='last'):
+        save_path = self.save_path+'_'+task
+        if not exists(save_path):
+            return {}
+        else:
+            state = load(save_path, map_location=self.device)
+
+            self.model.load_state_dict(state['model'])
+            results = {'metrics': state['metrics'], 'tasks': state['tasks'], 'losses': state['losses']}
+            return results
 
 
 if __name__ == '__main__':

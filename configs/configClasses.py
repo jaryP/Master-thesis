@@ -18,7 +18,10 @@ class DefaultConfig(object):
 
     USE_TENSORBOARD = True
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     MODEL_NAME = ''
+    SAVE_PATH = '.'
+
     RUN_NAME = 'default'
     LOSS = 'cross_entropy'
     OPTIMIZER = 'SGD'
@@ -38,14 +41,3 @@ class OnlineLearningConfig(DefaultConfig):
 
 class RealEwc(DefaultConfig):
     EWC_TYPE = continual_learning.RealEWC
-
-
-# class CONFIG_CIFAR10(DefaultConfig):
-#     LR = 0.001
-#     L1_REG = 0
-#     EPOCHS = 5
-#
-# class KAF_CONFIG_CIFAR10(DefaultConfig):
-#     LR = 0.001
-#     L1_REG = 1e-4
-#     EPOCHS = 5
