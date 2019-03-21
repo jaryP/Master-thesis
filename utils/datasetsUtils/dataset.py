@@ -1,6 +1,4 @@
 import warnings
-
-import torch
 from torch.utils.data import Dataset
 from abc import ABC, abstractmethod
 import os
@@ -33,7 +31,7 @@ class GeneralDatasetLoader(ABC, Dataset):
 
         self.task_manager = None
 
-        self.X, self.Y, self.class2idx, self.idx2class = None, None, None, None
+        self.X, self.Y, self.class_to_idx, self.idx_to_class = None, None, None, None
         self.task2idx = None
         self._n_tasks = None
         self.class_to_idx = None
@@ -84,7 +82,7 @@ class GeneralDatasetLoader(ABC, Dataset):
         return self._current_task
 
     @abstractmethod
-    def getIterator(self, batch_size):
+    def getIterator(self, batch_size, task=None):
         raise NotImplementedError
 
     @abstractmethod
