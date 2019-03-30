@@ -1,4 +1,4 @@
-from networks.net_utils import KAF, elu
+from networks.net_utils import KAF, elu, MultiKAF
 import torch.nn as nn
 from networks.net_utils import AbstractNetwork
 
@@ -43,25 +43,72 @@ class KAFCNN(AbstractNetwork):
 
 
 class KAFMLP(AbstractNetwork):
+
+    def __init__(self, n_outputs, hidden_size=400, kaf_init_fcn=elu, trainable_dict=False, kernel='gaussian', D=20):
+        super(KAFMLP, self).__init__(n_outputs)
+        self.build_net(hidden_size=hidden_size, kaf_init_fcn=kaf_init_fcn, trainable_dict=trainable_dict,
+                       kernel=kernel, D=D)
+
     def build_net(self, *args, **kwargs):
         hidden_size = kwargs['hidden_size']
         kaf_init_fcn = kwargs['kaf_init_fcn']
         trainable_dict = kwargs.get('trainable_dict', False)
+        kernel = kwargs.get('kernel')
+        D = kwargs.get('D')
+
         self.fc1 = nn.Linear(28 * 28, hidden_size)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.fc3 = nn.Linear(hidden_size, hidden_size)
         self.fc4 = nn.Linear(hidden_size, self.output_size)
-        self.kaf1 = KAF(hidden_size, init_fcn=kaf_init_fcn, D=20, trainable_dict=trainable_dict)
-        self.kaf2 = KAF(hidden_size, init_fcn=kaf_init_fcn, D=20, trainable_dict=trainable_dict)
-        self.kaf3 = KAF(hidden_size, init_fcn=kaf_init_fcn, D=20, trainable_dict=trainable_dict)
+        self.kaf1 = KAF(hidden_size, init_fcn=kaf_init_fcn, D=D, trainable_dict=trainable_dict, kernel=kernel)
+        self.kaf2 = KAF(hidden_size, init_fcn=kaf_init_fcn, D=D, trainable_dict=trainable_dict, kernel=kernel)
+        self.kaf3 = KAF(hidden_size, init_fcn=kaf_init_fcn, D=D, trainable_dict=trainable_dict, kernel=kernel)
 
     def eval_forward(self, x, task=None):
         x = self.forward(x)
         return (nn.functional.softmax(x, dim=1).max(dim=1)[1]).cpu().detach().numpy()
 
-    def __init__(self, n_outputs, hidden_size=400, kaf_init_fcn=elu, trainable_dict=False):
-        super(KAFMLP, self).__init__(n_outputs)
-        self.build_net(hidden_size=hidden_size, kaf_init_fcn=kaf_init_fcn, trainable_dict=trainable_dict)
+    def forward(self, input):
+        x = self.kaf1(self.fc1(input))
+        x = self.kaf2(self.fc2(x))
+        x = self.kaf3(self.fc3(x))
+        x = self.fc4(x)
+        return x
+
+
+class MultiKAFMLP(AbstractNetwork):
+    def __init__(self, n_outputs, hidden_size=400, kaf_init_fcn=elu, trainable_dict=False, D=20,
+                 kernel_combination='weighted'):
+        super().__init__(n_outputs)
+        self.build_net(hidden_size=hidden_size, kaf_init_fcn=kaf_init_fcn, trainable_dict=trainable_dict,
+                       D=D, kernel_combination=kernel_combination)
+
+    def build_net(self, *args, **kwargs):
+        hidden_size = kwargs['hidden_size']
+        kaf_init_fcn = kwargs['kaf_init_fcn']
+        trainable_dict = kwargs.get('trainable_dict', False)
+        D = kwargs.get('D')
+        kernel_combination = kwargs.get('kernel_combination')
+
+        self.fc1 = nn.Linear(28 * 28, hidden_size)
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.fc3 = nn.Linear(hidden_size, hidden_size)
+        self.fc4 = nn.Linear(hidden_size, self.output_size)
+
+        self.kaf1 = MultiKAF(hidden_size, init_fcn=kaf_init_fcn, D=D, trainable_dict=trainable_dict,
+                             kernel_combination=kernel_combination)
+        self.kaf2 = MultiKAF(hidden_size, init_fcn=kaf_init_fcn, D=D, trainable_dict=trainable_dict,
+                             kernel_combination=kernel_combination)
+        self.kaf3 = MultiKAF(hidden_size, init_fcn=kaf_init_fcn, D=D, trainable_dict=trainable_dict,
+                             kernel_combination=kernel_combination)
+
+        # self.kaf1 = KAF(hidden_size, init_fcn=kaf_init_fcn, D=D, trainable_dict=trainable_dict, kernel='gaussian')
+        # self.kaf2 = KAF(hidden_size, init_fcn=kaf_init_fcn, D=D, trainable_dict=trainable_dict, kernel='gaussian')
+        # self.kaf3 = KAF(hidden_size, init_fcn=kaf_init_fcn, D=D, trainable_dict=trainable_dict, kernel='gaussian')
+
+    def eval_forward(self, x, task=None):
+        x = self.forward(x)
+        return (nn.functional.softmax(x, dim=1).max(dim=1)[1]).cpu().detach().numpy()
 
     def forward(self, input):
         x = self.kaf1(self.fc1(input))

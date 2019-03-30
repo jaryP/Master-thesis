@@ -14,7 +14,7 @@ class DefaultConfig(object):
     EWC_SAMPLE_SIZE = 250
     EWC_IMPORTANCE = 1000
     USE_EWC = True
-    EWC_TYPE = continual_learning.EWC
+    EWC_TYPE = continual_learning.RealEWC
 
     USE_TENSORBOARD = True
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
