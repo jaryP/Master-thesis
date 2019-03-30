@@ -101,6 +101,10 @@ class Trainer:
             losses_per_task[current_task] = losses
             has_next_task = self.dataset.next_task(round_robin=False)
 
+            # a = self.metrics_calculator.metrics
+            # for k, v in a['tasks'].items():
+            #     print(k, v['accuracy'])
+
             if self.save_modality == 2:
                 state_dict = {}
                 for k, v in self.model.state_dict().items():
@@ -131,6 +135,7 @@ class Trainer:
     def epoch(self, n):
         self.model.train()
         self.dataset.train_phase()
+        current_task = self.dataset.task
 
         i = 0
         epoch_loss_full = 0
@@ -143,6 +148,9 @@ class Trainer:
             it.set_description("Training task {}, epoch {}".format(self.dataset.task, n+1))
 
         for x, y in it:
+
+            self.model.task = current_task
+
             x, y = x.to(self.config.DEVICE), \
                             y.to(self.config.DEVICE)
 
@@ -166,7 +174,7 @@ class Trainer:
                 if penality != 0:
                     loss.backward()
 
-            clip_grad_norm_(self.model.parameters(), 20)
+            # clip_grad_norm_(self.model.parameters(), 20)
             self.optimizer.step()
 
             epoch_loss_full += loss.detach().item()
@@ -226,6 +234,7 @@ if __name__ == '__main__':
     import utils.datasetsUtils.MINST as MINST
 
     from utils.datasetsUtils.taskManager import SingleTargetClassificationTask, NoTask
+    from networks.continual_learning import GEM
     from configs.configClasses import DefaultConfig, OnlineLearningConfig
     from torchvision.transforms import transforms
 
@@ -239,12 +248,17 @@ if __name__ == '__main__':
                                   force_download=False, train_split=0.8)
     dataset.load_dataset()
 
-    net = Kafnet.KAFMLP(len(dataset.class_to_idx), hidden_size=int(400), kernel='gaussian', kaf_init_fcn=None)
+    net = NoKafnet.MLP(len(dataset.class_to_idx))
+    # net = Kafnet.KAFMLP(len(dataset.class_to_idx), hidden_size=int(400), kernel='gaussian', kaf_init_fcn=None)
     # net = Kafnet.MultiKAFMLP(len(dataset.class_to_idx), hidden_size=int(400), kaf_init_fcn=None)
 
     config = OnlineLearningConfig()
     config.EPOCHS = 10
-    config.EWC_IMPORTANCE = 1000
+    config.LR = 1e-3
+    # config.EWC_IMPORTANCE = 1000
+    config.EWC_TYPE = GEM
+    config.USE_EWC = True
+    config.EWC_IMPORTANCE = 0.5
     config.L1_REG = 0
     config.IS_CONVOLUTIONAL = False
     print(config)

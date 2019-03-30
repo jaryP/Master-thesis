@@ -1,3 +1,4 @@
+import quadprog
 import torch.nn as nn
 from copy import deepcopy
 from networks.net_utils import AbstractNetwork
@@ -5,6 +6,9 @@ from networks.net_utils import AbstractNetwork
 from utils.datasetsUtils.dataset import GeneralDatasetLoader
 import torch.nn.functional as F
 import random
+from torch import dot as dot_product
+from torch import stack, cat, mm, zeros, Tensor
+import numpy as np
 
 
 class RealEWC(object):
@@ -284,6 +288,7 @@ class GEM(object):
         self.device = config.DEVICE
         self.sample_size = config.EWC_SAMPLE_SIZE
         self._current_task = 0
+        self.margin = config.EWC_IMPORTANCE
 
         self.current_gradients = {}
         self.tasks_gradients = {}
@@ -293,6 +298,9 @@ class GEM(object):
 
     def __call__(self, *args, **kwargs):
 
+        if kwargs['current_task'] == 0:
+            return self, 0
+
         current_gradients = {}
         for n, p in self.model.named_parameters():
             if p.requires_grad:
@@ -300,30 +308,125 @@ class GEM(object):
 
         self._save_gradients(current_task=kwargs['current_task'])
 
-        self._constraints_gradients(current_task=kwargs['current_task'], current_gradients=current_gradients)
+        done = self._constraints_gradients(current_task=kwargs['current_task'], current_gradients=current_gradients)
 
-        for n, p in self.model.named_parameters():
-            if p.requires_grad:
-                p.copy_(current_gradients[n])
+        if not done:
+            for n, p in self.model.named_parameters():
+                if p.requires_grad:
+                    p.grad.copy_(current_gradients[n].view(p.grad.data.size()))
 
         return self, 0
 
+    def _qp(self, past_tasks_gradient, current_gradient):
+        t = past_tasks_gradient.shape[0]
+        P = np.dot(past_tasks_gradient, past_tasks_gradient.transpose())
+        P = 0.5 * (P + P.transpose())  # + np.eye(t) * eps
+        q = np.dot(past_tasks_gradient, current_gradient) * -1
+        q = np.squeeze(q, 1)
+        h = np.zeros(t) + self.margin
+        G = np.eye(t)
+        v = quadprog.solve_qp(P, q, G, h)[0]
+        return v
+
     def _constraints_gradients(self, current_task, current_gradients):
 
-        violated = False
-        for t, g in self.tasks_gradients:
-            if t < current_task:
-                dot = 0
-                if dot < 0:
-                    violated=True
-                    break
+        done = False
 
-        if violated:
-            pass
+        for n, cg in current_gradients.items():
+            tg = []
+            for t, tgs in self.tasks_gradients.items():
+                if t < current_task:
+                    tg.append(tgs[n])
+
+            tg = stack(tg, 1).cpu()
+            a = mm(cg.unsqueeze(0).cpu(), tg)
+
+            if (a < 0).sum() != 0:
+                done = True
+                # print(a)
+                # del a
+                cg = cg.unsqueeze(1).cpu().contiguous().numpy().astype(np.double)#.astype(np.float16)
+                tg = tg.numpy().transpose().astype(np.double)#.astype(np.float16)
+
+                v = self._qp(tg, cg)
+
+                cg += np.expand_dims(np.dot(v, tg), 1)
+
+                del tg
+
+                for name, p in self.model.named_parameters():
+                    if name == n:
+                        p.grad.data.copy_(Tensor(cg).view(p.size()))
+
+        return done
+
+    def _constraints_gradients1(self, current_task, current_gradients):
+
+        cg = []
+        for n, g in current_gradients.items():
+            cg.append(g)
+        cg = cat(cg, 0)
+
+        tg = []
+        for t, tgs in self.tasks_gradients.items():
+            if t >= current_task:
+                continue
+            ctg = []
+            for n, g in tgs.items():
+                ctg.append(g)
+            ctg = cat(ctg, 0)
+            tg.append(ctg)
+
+        tg = stack(tg, 1)
+        a = mm(cg.unsqueeze(0), tg)
+
+        if (a < 0).sum() != 0:
+            cg_np = cg.unsqueeze(1).cpu().contiguous().numpy().astype(np.double)#.astype(np.float16)
+            del cg
+
+            tg_np = tg.cpu().numpy().transpose().astype(np.double)#.astype(np.float16)
+
+            v = self._qp(tg_np, cg_np)
+
+            cg_np += np.expand_dims(np.dot(v, tg_np), 1)
+            del tg, tg_np
+
+            i = 0
+
+            for name, p in self.model.named_parameters():
+                size = p.size()
+                flat_size = np.prod(size)#.view(-1)
+                p.grad.data.copy_(Tensor(cg_np[i: i+flat_size]).view(size))
+                i += flat_size
+
+            # cg = []
+            # for n, g in self.model.named_parameters():
+            #     if g.requires_grad:
+            #         cg.append(deepcopy(g.grad.data.view(-1)))
+            # cg = cat(cg, 0)
+            #
+            # tg = []
+            # for t, tgs in self.tasks_gradients.items():
+            #     if t >= current_task:
+            #         continue
+            #     ctg = []
+            #     for n, g in tgs.items():
+            #         ctg.append(g)
+            #     ctg = cat(ctg, 0)
+            #     tg.append(ctg)
+            #
+            # tg = stack(tg, 1)
+            # print(a)
+            # a = mm(cg.unsqueeze(0), tg)
+            # print(a)
+            # print()
+            return True
+        else:
+            return False
 
     def _save_gradients(self, current_task):
 
-        if current_task-1 in self.tasks or current_task == 0:
+        if current_task == 0:
             return
 
         self._current_task = current_task
@@ -331,31 +434,33 @@ class GEM(object):
 
         self.model.eval()
 
-        old_tasks = []
         for sub_task in range(current_task):
-            it = self.dataset.getIterator(self.sample_size, task=sub_task)
-            images, _ = next(it)
-            old_tasks.extend([(images[i], sub_task) for i in range(len(images))])
-        old_tasks = random.sample(old_tasks, k=self.sample_size)
 
-        for (input, task_idx) in old_tasks:
-
+            self.model.task = sub_task
             self.model.zero_grad()
-            self.model.task = task_idx
-            input = input.to(self.device)
 
-            if self.is_conv:
-                output = self.model(input.view(1, input.shape[0], input.shape[1], input.shape[2]))
-            else:
-                output = self.model(input.view(1, -1))
+            for images, label in self.dataset.getIterator(10, task=sub_task):
+                # it = self.dataset.getIterator(32, task=sub_task)
+                # images, _ = next(it)
 
-            label = output.max(1)[1].view(-1)
-            loss = F.nll_loss(F.log_softmax(output, dim=1), label)
-            loss.backward()
+                input = images.to(self.device)
+                label = label.to(self.device)
+
+                if self.is_conv:
+                    output = self.model(input.view(1, input.shape[0], input.shape[1], input.shape[2]))
+                else:
+                    output = self.model(input)#.view(1, -1))
+
+                # label = output.max(1)[1].view(-1)
+
+                loss = F.nll_loss(F.log_softmax(output, dim=1), label)
+                loss.backward()
+                break
 
             gradients = {}
             for n, p in self.model.named_parameters():
                 if p.requires_grad:
                     gradients[n] = p.grad.data.view(-1)
 
-            self.tasks_gradients[task_idx] = gradients
+            self.tasks_gradients[sub_task] = deepcopy(gradients)
+
