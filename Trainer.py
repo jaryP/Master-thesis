@@ -8,6 +8,7 @@ from utils.metrics import MetricsHolder
 from networks.net_utils import AbstractNetwork
 from os.path import join, exists
 from os import makedirs
+import warnings
 
 
 class Trainer:
@@ -27,12 +28,15 @@ class Trainer:
             makedirs(config.SAVE_PATH)
 
         if config.DEVICE != 'cpu':
-            self.model.cuda(self.device)
+            self.model.to(self.device)
 
+        self.ewc = None
         if config.USE_EWC:
-            self.ewc = config.EWC_TYPE(self.model, self.dataset, config)
-        else:
-            self.ewc = None
+            if config.EWC_TYPE is None:
+                self.ewc = None
+                warnings.warn("Ewc type is set to None  ")
+            else:
+                self.ewc = config.EWC_TYPE(self.model, self.dataset, config)
 
         self.results = dict()
 
@@ -147,6 +151,8 @@ class Trainer:
         else:
             it.set_description("Training task {}, epoch {}".format(self.dataset.task, n+1))
 
+        loss_calcualted = False
+
         for x, y in it:
 
             self.model.task = current_task
@@ -164,17 +170,17 @@ class Trainer:
                     l1_loss += sum(abs(param))
                 loss = loss + self.config.L1_REG * l1_loss
 
-            loss.backward()
+            loss.backward(retain_graph=True)
 
             if self.ewc is not None:
                 self.ewc, penality = self.ewc(current_task=self.dataset.task)
-                # print(penality)
-                loss = loss + self.config.EWC_IMPORTANCE * penality
 
                 if penality != 0:
-                    loss.backward()
+                    loss = loss + self.config.EWC_IMPORTANCE * penality.to(self.config.DEVICE)
+                    self.optimizer.zero_grad()
+                    loss.backward(retain_graph=True)
 
-            # clip_grad_norm_(self.model.parameters(), 20)
+            clip_grad_norm_(self.model.parameters(), 20)
             self.optimizer.step()
 
             epoch_loss_full += loss.detach().item()
@@ -234,7 +240,7 @@ if __name__ == '__main__':
     import utils.datasetsUtils.MINST as MINST
 
     from utils.datasetsUtils.taskManager import SingleTargetClassificationTask, NoTask
-    from networks.continual_learning import GEM
+    from networks.continual_learning import GEM, Bayesian
     from configs.configClasses import DefaultConfig, OnlineLearningConfig
     from torchvision.transforms import transforms
 
@@ -248,17 +254,19 @@ if __name__ == '__main__':
                                   force_download=False, train_split=0.8)
     dataset.load_dataset()
 
-    net = NoKafnet.MLP(len(dataset.class_to_idx))
+    # net = NoKafnet.MLP(len(dataset.class_to_idx))
     # net = Kafnet.KAFMLP(len(dataset.class_to_idx), hidden_size=int(400), kernel='gaussian', kaf_init_fcn=None)
-    # net = Kafnet.MultiKAFMLP(len(dataset.class_to_idx), hidden_size=int(400), kaf_init_fcn=None)
+    net = Kafnet.MultiKAFMLP(len(dataset.class_to_idx), hidden_size=int(400-0.7), kaf_init_fcn=None, kernel_combination='softmax')
 
     config = OnlineLearningConfig()
-    config.EPOCHS = 10
-    config.LR = 1e-3
-    # config.EWC_IMPORTANCE = 1000
-    config.EWC_TYPE = GEM
+    config.EPOCHS = 5
+    config.LR = 2e-3
+    config.EWC_IMPORTANCE = 1000
+    config.EWC_SAMPLE_SIZE = 200
+    config.EWC_TYPE = OnlineLearningConfig.EWC_TYPE
+
     config.USE_EWC = True
-    config.EWC_IMPORTANCE = 0.5
+    config.EWC_IMPORTANCE = 1000
     config.L1_REG = 0
     config.IS_CONVOLUTIONAL = False
     print(config)

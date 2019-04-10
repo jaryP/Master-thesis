@@ -41,3 +41,9 @@ class OnlineLearningConfig(DefaultConfig):
 
 class RealEwc(DefaultConfig):
     EWC_TYPE = continual_learning.RealEWC
+
+
+class GEM(DefaultConfig):
+    EWC_TYPE = continual_learning.GEM
+    EWC_IMPORTANCE = 0.5
+
