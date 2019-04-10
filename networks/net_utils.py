@@ -6,6 +6,8 @@ from abc import ABC, abstractmethod
 import torch.nn as nn
 import torch.nn.functional as F
 import warnings
+from torch import sigmoid as tsig
+from copy import deepcopy
 
 
 def elu(s):
@@ -21,28 +23,28 @@ def tanh(x):
 
 
 def gaussian_kernel(model):
-    def kernel(input):
-        return torch.exp(- torch.mul((torch.add(input.unsqueeze(model.unsqueeze_dim), - model.dict)) ** 2, model.gamma))
+    def kernel(model, input):
+        return torch.exp(-torch.mul((torch.add(input.unsqueeze(model.unsqueeze_dim), - model.dict)) ** 2, model.gamma))
 
     return kernel, np.exp(- model.gamma_init * (model.dict_numpy - model.dict_numpy.T) ** 2)
 
 
 def relu_kernel(model):
-    def kernel(input):
+    def kernel(model, input):
         return F.relu(input.unsqueeze(model.unsqueeze_dim) - model.dict)
 
     return kernel, None
 
 
 def softplus_kernel(model):
-    def kernel(input):
+    def kernel(model, input):
         return F.softplus(input.unsqueeze(model.unsqueeze_dim) - model.dict)
 
     return kernel, np.log(np.exp(model.dict_numpy - model.dict_numpy.T) + 1.0)
 
 
 def polynomial_kernel(model):
-    def kernel(input):
+    def kernel(model, input):
         return torch.pow(1 + torch.mul(input.unsqueeze(model.unsqueeze_dim), model.dict), 2)
 
     return kernel, (1 + np.power(model.dict_numpy - model.dict_numpy.T, 2))
@@ -152,7 +154,7 @@ class KAF(nn.Module):
             normal_(self.alpha.data, std=0.8)
 
     def forward(self, input):
-        K = self.kernel(input)
+        K = self.kernel(self, input)
         y = torch.sum(K * self.alpha, self.unsqueeze_dim)
         return y
 
@@ -164,7 +166,8 @@ class MultiKAF(nn.Module):
     def __init__(self, num_parameters, D=20, boundary=3.0, init_fcn=None, is_conv=False, trainable_dict=False,
                  kernel_combination='weighted'):
         super().__init__()
-        self.kernels = ['gaussian', 'polynomial']#, 'relu', 'softplus']
+        self.kernels = ['gaussian', 'polynomial', 'relu']#, 'softplus']
+        self.is_conv = is_conv
 
         self.dict_numpy = np.linspace(-boundary, boundary, D).astype(np.float32).reshape(-1, 1)
         dict_tensor = torch.from_numpy(self.dict_numpy).view(-1)
@@ -251,48 +254,70 @@ class MultiKAF(nn.Module):
         if init_fcn is None:
             normal_(alpha, mean=0, std=0.2)
 
-        if kernel_combination == 'weighted':
-            self.kernel_combination = self.kernel_sum
-        elif kernel_combination == 'softmax':
+        if kernel_combination == 'softmax':
             self.kernel_combination = self.kernel_softmax
-        elif kernel_combination == 'normalized':
-            self.kernel_combination = self.kernel_normalized_sum
-        elif kernel_combination == 'sum':
+
+        elif kernel_combination == 'sigmoid':
+            self.kernel_combination = self.kernel_sigmoid
+
+        elif kernel_combination == 'attention':
+            self.attention = nn.Linear(num_parameters, 1, bias=False)
+            self.kernel_combination = self.kernel_attention
+
+        elif kernel_combination == 'sum' or kernel_combination == 'weighted':
             self.kernel_combination = self.kernel_sum
-            self.alpha.fill_(1/D)
+
         else:
-            warnings.warn('Kernel aggregator not understood {}. '
+            warnings.warn('Kernel combination strategy not understood {}. '
                           'Default weighted sum will be used '.format(kernel_combination), RuntimeWarning)
             self.kernel_combination = self.kernel_sum
 
         self.alpha = Parameter(alpha, requires_grad=True)
 
-    def kernel_sum(self, x):
-        x = torch.sum(x, self.unsqueeze_dim+1)
-        x = self.alpha * x
-        y = torch.sum(x, self.unsqueeze_dim)
+    def kernel_sum(self, x, f):
+        f = self.mu * f
+        y = torch.sum(f, self.unsqueeze_dim+1)
         return y
 
-    def kernel_normalized_sum(self, x):
-        x = torch.sum(x, self.unsqueeze_dim+1)
-        f = F.softmax(self.alpha, dim=self.unsqueeze_dim) * x
-        y = torch.sum(f, self.unsqueeze_dim)
+    def kernel_softmax(self, x, f):
+        sm = F.softmax(self.mu, dim=-1)
+        f = torch.mul(sm, f)
+        y = torch.sum(f, self.unsqueeze_dim+1)
         return y
 
-    def kernel_softmax(self, x):
-        x = torch.sum(x, self.unsqueeze_dim+1)
-        sm = F.softmax(self.alpha, dim=self.unsqueeze_dim)
-        f = torch.mul(sm, x)
-        y = torch.sum(f, self.unsqueeze_dim)
+    def kernel_sigmoid(self, x, f):
+        sm = tsig(self.mu)
+        f = torch.mul(sm, f)
+        y = torch.sum(f, self.unsqueeze_dim+1)
+        return y
+
+    def kernel_attention(self, x, f):
+
+        s = self.attention(x)
+        d = [1] * len(tuple(self.mu.size()))
+        d[0] = s.size()[0]
+        mu = self.mu.repeat(d)
+        for _ in range(2, len(d)):
+            s.unsqueeze_(-1)
+        d = list(mu.size())
+        d[0] = -1
+        s = s.expand(d)
+        m = torch.mul(mu, s)
+        sm = F.softmax(m, dim=-1)
+        f = torch.mul(sm, f)
+        y = torch.sum(f, self.unsqueeze_dim+1)
         return y
 
     def forward(self, x):
         f = []
         for k in self.kernels:
-            c = getattr(self, k)(x)
+            c = getattr(self, k)(self, x)
             f.append(c)
+
         f = torch.stack(f, -1)
         f = f.to(self.mu.device)
-        f = torch.mul(f, self.mu)
-        y = self.kernel_combination(f)
+        y = self.kernel_combination(x, f)
+        y = torch.mul(y, self.alpha)
+        y = torch.sum(y, self.unsqueeze_dim)
+
         return y
