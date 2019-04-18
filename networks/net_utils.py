@@ -26,28 +26,40 @@ def gaussian_kernel(model):
     def kernel(model, input):
         return torch.exp(-torch.mul((torch.add(input.unsqueeze(model.unsqueeze_dim), - model.dict)) ** 2, model.gamma))
 
-    return kernel, np.exp(- model.gamma_init * (model.dict_numpy - model.dict_numpy.T) ** 2)
+    def kernel_init(x):
+        return np.exp(- model.gamma_init * (x) ** 2)
+
+    return kernel, kernel_init
 
 
 def relu_kernel(model):
     def kernel(model, input):
         return F.relu(input.unsqueeze(model.unsqueeze_dim) - model.dict)
 
-    return kernel, None
+    def kernel_init(_):
+        return None
+
+    return kernel, kernel_init
 
 
 def softplus_kernel(model):
     def kernel(model, input):
         return F.softplus(input.unsqueeze(model.unsqueeze_dim) - model.dict)
 
-    return kernel, np.log(np.exp(model.dict_numpy - model.dict_numpy.T) + 1.0)
+    def kernel_init(x):
+        return np.log(np.exp(x) + 1.0)
+
+    return kernel, kernel_init()
 
 
 def polynomial_kernel(model):
     def kernel(model, input):
         return torch.pow(1 + torch.mul(input.unsqueeze(model.unsqueeze_dim), model.dict), 2)
 
-    return kernel, (1 + np.power(model.dict_numpy - model.dict_numpy.T, 2))
+    def kernel_init(x):
+        return 1 + np.power(x, 2)
+
+    return kernel, kernel_init
 
 
 class AbstractNetwork(ABC, nn.Module):
@@ -108,11 +120,9 @@ class KAF(nn.Module):
             self.unsqueeze_dim = 4
             self.register_buffer('gamma',
                                  torch.from_numpy(np.ones((1, 1, 1, 1, self.D), dtype=np.float32) * self.gamma_init))
-            self.alpha = Parameter(torch.FloatTensor(1, self.num_parameters, 1, 1, self.D))
         else:
             self.unsqueeze_dim = 2
             self.register_buffer('gamma', torch.from_numpy(np.ones((1, 1, self.D), dtype=np.float32) * self.gamma_init))
-            self.alpha = Parameter(torch.FloatTensor(1, self.num_parameters, self.D))
 
         if kernel == 'gaussian':
             self.kernel, self.kernel_init = gaussian_kernel(self)
@@ -127,30 +137,31 @@ class KAF(nn.Module):
 
         self.init_fcn = init_fcn
         if init_fcn is not None:
-            K = self.kernel_init
+
+            K = self.kernel_init(self.dict_numpy - self.dict_numpy.T)
 
             if K is None:
                 warnings.warn('Cannot perform kernel ridge regression with {} kernel '.format(kernel), RuntimeWarning)
                 self.alpha_init = None
                 normal_(self.alpha.data, std=0.8)
             else:
-                self.alpha_init = np.linalg.solve(K + 1e-4 * np.eye(self.D), self.init_fcn(self.dict_numpy)).reshape(
+                alpha_init = np.linalg.solve(K + 1e-4 * np.eye(self.D), self.init_fcn(self.dict_numpy)).reshape(
                     -1).astype(np.float32)
-                if is_conv:
-                    self.alpha.data = torch.from_numpy(self.alpha_init).repeat(1, self.num_parameters, 1, 1, 1)
-                else:
-                    self.alpha.data = torch.from_numpy(self.alpha_init).repeat(1, self.num_parameters, 1)
-        else:
-            self.alpha_init = None
-            normal_(self.alpha.data, std=0.8)
 
-    def reset_parameters(self, is_conv=False):
-        if self.init_fcn is not None:
-            if is_conv:
-                self.alpha.data = torch.from_numpy(self.alpha_init).repeat(1, self.num_parameters, 1, 1, 1)
-            else:
-                self.alpha.data = torch.from_numpy(self.alpha_init).repeat(1, self.num_parameters, 1)
+                alpha_tensor = torch.from_numpy(alpha_init).view(-1)
+                alpha_tensor = alpha_tensor.unsqueeze(0)
+
+                if is_conv:
+                    alpha_tensor = alpha_tensor.repeat(1, self.num_parameters, 1, 1, 1)
+                else:
+                    alpha_tensor = alpha_tensor.repeat(1, self.num_parameters, 1)
+
+                self.alpha = Parameter(alpha_tensor)
         else:
+            if is_conv:
+                self.alpha = Parameter(torch.FloatTensor(1, self.num_parameters, 1, 1, self.D))
+            else:
+                self.alpha = Parameter(torch.FloatTensor(1, self.num_parameters, self.D))
             normal_(self.alpha.data, std=0.8)
 
     def forward(self, input):
@@ -183,6 +194,7 @@ class MultiKAF(nn.Module):
             self.register_buffer('dict', dict_tensor)
 
         K = 0
+        inits = []
         for k in self.kernels:
             if k == 'gaussian':
                 interval = (self.dict_numpy[1] - self.dict_numpy[0])
@@ -190,7 +202,7 @@ class MultiKAF(nn.Module):
                 self.gamma_init = float(0.5 / np.square(sigma))
 
                 kernel, kernel_init = gaussian_kernel(self)
-                K += kernel_init
+                inits.append(kernel_init)
 
                 if is_conv:
                     self.register_buffer('gamma',
@@ -204,11 +216,11 @@ class MultiKAF(nn.Module):
 
             elif k == 'softplus':
                 kernel, kernel_init = softplus_kernel(self)
-                K += kernel_init
+                inits.append(kernel_init)
 
             elif k == 'polynomial':
                 kernel, kernel_init = polynomial_kernel(self)
-                K += kernel_init
+                inits.append(kernel_init)
 
             else:
                 raise ValueError("Unexpected 'kernel'!", k)
@@ -242,11 +254,11 @@ class MultiKAF(nn.Module):
         if is_conv:
             self.unsqueeze_dim = 4
             alpha = alpha.repeat(1, num_parameters, 1, 1, 1)
-            mu = mu.repeat(1, num_parameters, D, 1, 1, 1)
+            mu = mu.repeat(1, num_parameters, 1, 1, 1)
         else:
             self.unsqueeze_dim = 2
             alpha = alpha.repeat(1, num_parameters, 1)
-            mu = mu.repeat(1, num_parameters, D, 1)
+            mu = mu.repeat(1, num_parameters, 1)
 
         self.alpha = alpha
         self.mu = Parameter(mu, requires_grad=True)
@@ -260,9 +272,13 @@ class MultiKAF(nn.Module):
         elif kernel_combination == 'sigmoid':
             self.kernel_combination = self.kernel_sigmoid
 
-        elif kernel_combination == 'attention':
+        elif kernel_combination == 'layer_attention':
             self.attention = nn.Linear(num_parameters, 1, bias=False)
-            self.kernel_combination = self.kernel_attention
+            self.kernel_combination = self.kernel_layer_attention
+
+        elif kernel_combination == 'neuron_attention':
+            self.attention = nn.Linear(num_parameters, num_parameters, bias=False)
+            self.kernel_combination = self.kernel_neuron_attention
 
         elif kernel_combination == 'sum' or kernel_combination == 'weighted':
             self.kernel_combination = self.kernel_sum
@@ -275,24 +291,24 @@ class MultiKAF(nn.Module):
         self.alpha = Parameter(alpha, requires_grad=True)
 
     def kernel_sum(self, x, f):
-        f = self.mu * f
+        f = self.mu.unsqueeze(-2) * f
         y = torch.sum(f, self.unsqueeze_dim+1)
         return y
 
     def kernel_softmax(self, x, f):
         sm = F.softmax(self.mu, dim=-1)
-        f = torch.mul(sm, f)
+
+        f = torch.mul(sm.unsqueeze(-2), f)
         y = torch.sum(f, self.unsqueeze_dim+1)
         return y
 
     def kernel_sigmoid(self, x, f):
         sm = tsig(self.mu)
-        f = torch.mul(sm, f)
+        f = torch.mul(sm.unsqueeze(-2), f)
         y = torch.sum(f, self.unsqueeze_dim+1)
         return y
 
-    def kernel_attention(self, x, f):
-
+    def kernel_layer_attention(self, x, f):
         s = self.attention(x)
         d = [1] * len(tuple(self.mu.size()))
         d[0] = s.size()[0]
@@ -302,8 +318,24 @@ class MultiKAF(nn.Module):
         d = list(mu.size())
         d[0] = -1
         s = s.expand(d)
-        m = torch.mul(mu, s)
-        sm = F.softmax(m, dim=-1)
+        mu = torch.mul(mu, s)
+        sm = F.softmax(mu.unsqueeze(-2), dim=-1)
+        f = torch.mul(sm, f)
+        y = torch.sum(f, self.unsqueeze_dim+1)
+        return y
+
+    def kernel_neuron_attention(self, x, f):
+        s = self.attention(x)
+        d = [1] * len(tuple(self.mu.size()))
+        d[0] = s.size()[0]
+        mu = self.mu.repeat(d)
+        for _ in range(2, len(d)):
+            s.unsqueeze_(-1)
+        d = list(mu.size())
+        d[0] = -1
+        s = s.expand(d)
+        mu = torch.mul(mu, s)
+        sm = F.softmax(mu.unsqueeze(-2), dim=-1)
         f = torch.mul(sm, f)
         y = torch.sum(f, self.unsqueeze_dim+1)
         return y

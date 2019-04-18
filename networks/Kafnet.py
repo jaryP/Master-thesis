@@ -44,7 +44,7 @@ class KAFCNN(AbstractNetwork):
 
 class KAFMLP(AbstractNetwork):
 
-    def __init__(self, n_outputs, hidden_size=400, kaf_init_fcn=elu, trainable_dict=False, kernel='gaussian', D=20):
+    def __init__(self, n_outputs, hidden_size=400, kaf_init_fcn=None, trainable_dict=False, kernel='gaussian', D=20):
         super(KAFMLP, self).__init__(n_outputs)
         self.build_net(hidden_size=hidden_size, kaf_init_fcn=kaf_init_fcn, trainable_dict=trainable_dict,
                        kernel=kernel, D=D)
@@ -77,7 +77,7 @@ class KAFMLP(AbstractNetwork):
 
 
 class MultiKAFMLP(AbstractNetwork):
-    def __init__(self, n_outputs, hidden_size=400, kaf_init_fcn=elu, trainable_dict=False, D=20,
+    def __init__(self, n_outputs, hidden_size=400, kaf_init_fcn=None, trainable_dict=False, D=20,
                  kernel_combination='weighted'):
         super().__init__(n_outputs)
         self.build_net(hidden_size=hidden_size, kaf_init_fcn=kaf_init_fcn, trainable_dict=trainable_dict,

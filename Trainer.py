@@ -109,7 +109,7 @@ class Trainer:
             # for k, v in a['tasks'].items():
             #     print(k, v['accuracy'])
 
-            if self.save_modality == 2:
+            if self.save_modality >= 2:
                 state_dict = {}
                 for k, v in self.model.state_dict().items():
                     state_dict[k] = v.cpu()
@@ -223,7 +223,7 @@ class Trainer:
         self.metrics_calculator.add_evaluation(evaluated_task, self.dataset.task, y_true=y_true, y_pred=y_pred)
 
     def load(self, task='last'):
-        save_path = self.save_path+'_'+task
+        save_path = self.save_path+'_'+str(task)
         if not exists(save_path):
             return {}
         else:
@@ -256,7 +256,7 @@ if __name__ == '__main__':
 
     # net = NoKafnet.MLP(len(dataset.class_to_idx))
     # net = Kafnet.KAFMLP(len(dataset.class_to_idx), hidden_size=int(400), kernel='gaussian', kaf_init_fcn=None)
-    net = Kafnet.MultiKAFMLP(len(dataset.class_to_idx), hidden_size=int(400-0.7), kaf_init_fcn=None, kernel_combination='softmax')
+    net = Kafnet.MultiKAFMLP(len(dataset.class_to_idx), hidden_size=int(400-0.7), kaf_init_fcn=None, kernel_combination='neuron_attention')
 
     config = OnlineLearningConfig()
     config.EPOCHS = 5
