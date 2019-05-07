@@ -78,10 +78,11 @@ class KAFMLP(AbstractNetwork):
 
 class MultiKAFMLP(AbstractNetwork):
     def __init__(self, n_outputs, hidden_size=400, kaf_init_fcn=None, trainable_dict=False, D=20,
-                 kernel_combination='weighted'):
+                 kernel_combination='weighted', kernels=None):
         super().__init__(n_outputs)
+
         self.build_net(hidden_size=hidden_size, kaf_init_fcn=kaf_init_fcn, trainable_dict=trainable_dict,
-                       D=D, kernel_combination=kernel_combination)
+                       D=D, kernel_combination=kernel_combination, kernels=kernels)
 
     def build_net(self, *args, **kwargs):
         hidden_size = kwargs['hidden_size']
@@ -89,6 +90,7 @@ class MultiKAFMLP(AbstractNetwork):
         trainable_dict = kwargs.get('trainable_dict', False)
         D = kwargs.get('D')
         kernel_combination = kwargs.get('kernel_combination')
+        kernels = kwargs.get('kernels')
 
         self.fc1 = nn.Linear(28 * 28, hidden_size)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
@@ -96,11 +98,11 @@ class MultiKAFMLP(AbstractNetwork):
         self.fc4 = nn.Linear(hidden_size, self.output_size)
 
         self.kaf1 = MultiKAF(hidden_size, init_fcn=kaf_init_fcn, D=D, trainable_dict=trainable_dict,
-                             kernel_combination=kernel_combination)
+                             kernel_combination=kernel_combination, kernels=kernels)
         self.kaf2 = MultiKAF(hidden_size, init_fcn=kaf_init_fcn, D=D, trainable_dict=trainable_dict,
-                             kernel_combination=kernel_combination)
+                             kernel_combination=kernel_combination, kernels=kernels)
         self.kaf3 = MultiKAF(hidden_size, init_fcn=kaf_init_fcn, D=D, trainable_dict=trainable_dict,
-                             kernel_combination=kernel_combination)
+                             kernel_combination=kernel_combination, kernels=kernels)
 
         # self.kaf1 = KAF(hidden_size, init_fcn=kaf_init_fcn, D=D, trainable_dict=trainable_dict, kernel='gaussian')
         # self.kaf2 = KAF(hidden_size, init_fcn=kaf_init_fcn, D=D, trainable_dict=trainable_dict, kernel='gaussian')

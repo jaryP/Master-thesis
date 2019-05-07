@@ -44,6 +44,9 @@ def bwt(r):
     n = r.shape[0]
     v = 0
 
+    if n == 1:
+        return v, 1 - abs(min(v, 0)), max(v, 0)
+
     for i in range(1, n):
         for j in range(i):
             v += r[i][j] - r[j][j]
@@ -56,6 +59,9 @@ def bwt(r):
 def fwt(r):
     n = r.shape[0]
     v = 0
+
+    if n == 1:
+        return v
 
     for i in range(n):
         for j in range(i):

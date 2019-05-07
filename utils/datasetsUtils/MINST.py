@@ -254,7 +254,7 @@ class PermutedMINST(MINST):
         img = img[self.permuted_index[task]]
         target = t['y'][index]
 
-        img = torch.from_numpy(np.array(img, copy=False)).float()
+        img = torch.from_numpy(img).float()
 
         if self.transform is not None:
             img = self.transform(img)
