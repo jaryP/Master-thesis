@@ -5,8 +5,9 @@ from networks.net_utils import AbstractNetwork
 from utils.datasetsUtils.dataset import GeneralDatasetLoader
 import torch.nn.functional as F
 import random
-from torch import stack, cat, mm, Tensor
+from torch import stack, cat, mm, Tensor, clamp, zeros_like, from_numpy, unsqueeze, matmul, mul, abs
 import numpy as np
+from scipy.stats import multivariate_normal
 
 
 class RealEWC(object):
@@ -28,7 +29,7 @@ class RealEWC(object):
 
     def __call__(self, *args, **kwargs):
         self._update_matrix(kwargs['current_task'])
-        penality = self._penality(kwargs['model'])
+        penality = self._penalty(kwargs['model'])
         return self, penality
 
     def _update_matrix(self, current_task):
@@ -79,7 +80,7 @@ class RealEWC(object):
 
             self._precision_matrices[task_idx] = precision_matrices
 
-    def _penality(self, model: AbstractNetwork):
+    def _penalty(self, model: AbstractNetwork):
         loss = 0
         if len(self._precision_matrices) == 0:
             return 0
@@ -205,7 +206,7 @@ class OnlineEWC(object):
 
     def __call__(self, *args, **kwargs):
         self._update_matrix(kwargs['current_task'])
-        penality = self._penality()
+        penality = self._penalty()
         return self, penality
 
     def _update_matrix(self, current_task):
@@ -262,7 +263,7 @@ class OnlineEWC(object):
         else:
             self._precision_matrices = precision_matrices
 
-    def _penality(self):
+    def _penalty(self):
         loss = 0
 
         if self._precision_matrices is None:
@@ -354,7 +355,7 @@ class GEM(object):
 
                 for name, p in self.model.named_parameters():
                     if name == n:
-                        p.grad.data.copy_(Tensor(cg).view(p.size()))
+                        cg.grad.data.copy_(Tensor(cg).view(p.size()))
 
         return done
 
@@ -462,190 +463,3 @@ class GEM(object):
 
             self.tasks_gradients[sub_task] = deepcopy(gradients)
 
-
-class Bayesian(object):
-    def __init__(self, model: AbstractNetwork, dataset: GeneralDatasetLoader, config):
-
-        self.model = model
-        self.dataset = dataset
-
-        self.is_conv = config.IS_CONVOLUTIONAL
-        self.device = config.DEVICE
-        self.sample_size = config.EWC_SAMPLE_SIZE
-        self.margin = config.EWC_IMPORTANCE
-
-        self.sample_size_task = 0
-        self._current_task = 0
-
-        self.current_gradients = {}
-        self.tasks_gradients = {}
-
-        self.tasks = []
-        self._precision_matrices = {}
-
-    def __call__(self, *args, **kwargs):
-
-        self._save_parameters(current_task=kwargs['current_task'])
-        penalty = self._penality()
-        return self, penalty
-
-    def _save_parameters(self, current_task):
-
-        if current_task not in self._precision_matrices:
-            self.sample_size_task = 0
-            mean = {}
-            variance = {}
-            self._current_task = current_task
-
-            for n, p in self.model.named_parameters():
-                if p.requires_grad:
-                    mean[n] = deepcopy(p).to('cpu')
-                    variance[n] = deepcopy(p).to('cpu')**2
-
-            self._precision_matrices[current_task] = {'mean': mean, 'variance': variance, 'w': None}
-            if current_task > 0:
-                mean = {}
-                for n, p in self.model.named_parameters():
-                    if p.requires_grad:
-                        mean[n] = deepcopy(p).to('cpu')
-
-                self._precision_matrices[current_task-1].update({'w': mean})
-
-        self.sample_size_task += 1
-
-        if self.sample_size_task % self.sample_size == 0:
-            m = self.sample_size_task // self.sample_size
-            mean = self._precision_matrices[current_task]['mean']
-            # variance = self._precision_matrices[current_task]['variance']
-
-            for n, p in self.model.named_parameters():
-                if p.requires_grad:
-                    mean[n] = (m*mean[n] + p.to('cpu')) / (m+1)
-                    # variance[n] = (m*variance[n] + p.to('cpu')**2) / (m+1)
-
-            self._precision_matrices[current_task]['mean'] = mean
-            # self._precision_matrices[current_task]['variance'] = variance
-
-    def _penality(self):
-        loss = 0
-
-        if len(self._precision_matrices) <= 1:
-            return 0
-
-        for t in self._precision_matrices.keys():
-            if t != self._current_task:
-                for n, p in self.model.named_parameters():
-                    if p.requires_grad:
-                        mean = self._precision_matrices[t]['mean'][n]
-                        # variance = self._precision_matrices[t]['variance'][n]
-                        #
-                        # diag = variance - (mean ** 2)
-
-                        _loss = (p.to('cpu') - mean) ** 2
-                        loss += _loss.sum()
-
-        return loss
-
-    def _constraints_gradients1(self, current_task, current_gradients):
-
-        cg = []
-        for n, g in current_gradients.items():
-            cg.append(g)
-        cg = cat(cg, 0)
-
-        tg = []
-        for t, tgs in self.tasks_gradients.items():
-            if t >= current_task:
-                continue
-            ctg = []
-            for n, g in tgs.items():
-                ctg.append(g)
-            ctg = cat(ctg, 0)
-            tg.append(ctg)
-
-        tg = stack(tg, 1)
-        a = mm(cg.unsqueeze(0), tg)
-
-        if (a < 0).sum() != 0:
-            cg_np = cg.unsqueeze(1).cpu().contiguous().numpy().astype(np.double)#.astype(np.float16)
-            del cg
-
-            tg_np = tg.cpu().numpy().transpose().astype(np.double)#.astype(np.float16)
-
-            v = self._qp(tg_np, cg_np)
-
-            cg_np += np.expand_dims(np.dot(v, tg_np), 1)
-            del tg, tg_np
-
-            i = 0
-
-            for name, p in self.model.named_parameters():
-                size = p.size()
-                flat_size = np.prod(size)#.view(-1)
-                p.grad.data.copy_(Tensor(cg_np[i: i+flat_size]).view(size))
-                i += flat_size
-
-            # cg = []
-            # for n, g in self.model.named_parameters():
-            #     if g.requires_grad:
-            #         cg.append(deepcopy(g.grad.data.view(-1)))
-            # cg = cat(cg, 0)
-            #
-            # tg = []
-            # for t, tgs in self.tasks_gradients.items():
-            #     if t >= current_task:
-            #         continue
-            #     ctg = []
-            #     for n, g in tgs.items():
-            #         ctg.append(g)
-            #     ctg = cat(ctg, 0)
-            #     tg.append(ctg)
-            #
-            # tg = stack(tg, 1)
-            # print(a)
-            # a = mm(cg.unsqueeze(0), tg)
-            # print(a)
-            # print()
-            return True
-        else:
-            return False
-
-    def _save_gradients(self, current_task):
-
-        if current_task == 0:
-            return
-
-        self._current_task = current_task
-        self.tasks.append(current_task-1)
-
-        self.model.eval()
-
-        for sub_task in range(current_task):
-
-            self.model.task = sub_task
-            self.model.zero_grad()
-
-            for images, label in self.dataset.getIterator(10, task=sub_task):
-                # it = self.dataset.getIterator(32, task=sub_task)
-                # images, _ = next(it)
-
-                input = images.to(self.device)
-                label = label.to(self.device)
-
-                if self.is_conv:
-                    output = self.model(input.view(1, input.shape[0], input.shape[1], input.shape[2]))
-                else:
-                    output = self.model(input)#.view(1, -1))
-
-                # label = output.max(1)[1].view(-1)
-
-                loss = F.nll_loss(F.log_softmax(output, dim=1), label)
-                loss.backward()
-                break
-
-            gradients = {}
-            for n, p in self.model.named_parameters():
-                if p.requires_grad:
-                    gradients[n] = p.grad.data.view(-1)
-
-            self.tasks_gradients[sub_task] = deepcopy(gradients)

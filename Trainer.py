@@ -47,6 +47,8 @@ class Trainer:
 
         if config.OPTIMIZER == 'SGD':
             self.optimizer = optim.SGD(self.model.parameters(), lr=self.config.LR)
+        elif config.OPTIMIZER == 'Adam':
+            self.optimizer = optim.Adam(self.model.parameters(), lr=self.config.LR)
         else:
             raise ValueError('Not known optimizer, allowed ones are: SGD')
 
@@ -93,23 +95,24 @@ class Trainer:
 
                 self.evaluate()
 
-                if current_task > 0:
+                if current_task > 0 and self.dataset.tasks_number > 1:
                     for sub_task in range(current_task):
                         self.evaluate(sub_task)
 
                 self.dataset.task = current_task
 
-            for sub_task in range(current_task+1, self.dataset.tasks_number):
-                self.evaluate(sub_task)
+            if self.dataset.tasks_number > 1:
+                for sub_task in range(current_task+1, self.dataset.tasks_number):
+                    self.evaluate(sub_task)
 
             losses_per_task[current_task] = losses
             has_next_task = self.dataset.next_task(round_robin=False)
 
-            # a = self.metrics_calculator.metrics
-            # for k, v in a['tasks'].items():
-            #     print(k, v['accuracy'])
+            a = self.metrics_calculator.metrics
+            for k, v in a['tasks'].items():
+                print(k, v['accuracy'])
 
-            if self.save_modality == 2:
+            if self.save_modality >= 2:
                 state_dict = {}
                 for k, v in self.model.state_dict().items():
                     state_dict[k] = v.cpu()
@@ -151,8 +154,6 @@ class Trainer:
         else:
             it.set_description("Training task {}, epoch {}".format(self.dataset.task, n+1))
 
-        loss_calcualted = False
-
         for x, y in it:
 
             self.model.task = current_task
@@ -173,10 +174,12 @@ class Trainer:
             loss.backward(retain_graph=True)
 
             if self.ewc is not None:
-                self.ewc, penality = self.ewc(current_task=self.dataset.task)
+                if self.dataset.task > 0:
+                    a = 0
+                self.ewc, penalty = self.ewc(current_task=self.dataset.task)
 
-                if penality != 0:
-                    loss = loss + self.config.EWC_IMPORTANCE * penality.to(self.config.DEVICE)
+                if penalty != 0:
+                    loss = loss + self.config.EWC_IMPORTANCE * penalty.to(self.config.DEVICE)
                     self.optimizer.zero_grad()
                     loss.backward(retain_graph=True)
 
@@ -223,7 +226,7 @@ class Trainer:
         self.metrics_calculator.add_evaluation(evaluated_task, self.dataset.task, y_true=y_true, y_pred=y_pred)
 
     def load(self, task='last'):
-        save_path = self.save_path+'_'+task
+        save_path = self.save_path+'_'+str(task)
         if not exists(save_path):
             return {}
         else:
@@ -240,7 +243,8 @@ if __name__ == '__main__':
     import utils.datasetsUtils.MINST as MINST
 
     from utils.datasetsUtils.taskManager import SingleTargetClassificationTask, NoTask
-    from networks.continual_learning import GEM, Bayesian
+    from networks.continual_learning import GEM
+    from networks.continual_learning_beta import JaryGEM
     from configs.configClasses import DefaultConfig, OnlineLearningConfig
     from torchvision.transforms import transforms
 
@@ -252,21 +256,26 @@ if __name__ == '__main__':
 
     dataset = MINST.PermutedMINST('./data/minst', download=True, n_permutation=4,
                                   force_download=False, train_split=0.8)
+    # dataset.load_dataset()
+
+    # dataset = MINST.MINST('./data/minst', download=True, task_manager=NoTask,
+    #                       force_download=False, train_split=0.8, transform=None, target_transform=None)
     dataset.load_dataset()
 
     # net = NoKafnet.MLP(len(dataset.class_to_idx))
-    # net = Kafnet.KAFMLP(len(dataset.class_to_idx), hidden_size=int(400), kernel='gaussian', kaf_init_fcn=None)
-    net = Kafnet.MultiKAFMLP(len(dataset.class_to_idx), hidden_size=int(400-0.7), kaf_init_fcn=None, kernel_combination='softmax')
+    net = Kafnet.KAFMLP(len(dataset.class_to_idx), hidden_size=int(400*0.7), kernel='gaussian', kaf_init_fcn=None)
+    # net = Kafnet.MultiKAFMLP(len(dataset.class_to_idx), hidden_size=int(400*0.7),# kaf_init_fcn=None,
+    #                          kernels=['gaussian'])
 
     config = OnlineLearningConfig()
-    config.EPOCHS = 5
-    config.LR = 2e-3
-    config.EWC_IMPORTANCE = 1000
+    # config.DEVICE = 'cpu'
+    config.EPOCHS = 1
+    config.LR = 1e-3
+    config.EWC_IMPORTANCE = 0
     config.EWC_SAMPLE_SIZE = 200
-    config.EWC_TYPE = OnlineLearningConfig.EWC_TYPE
-
+    config.EWC_TYPE = JaryGEM
     config.USE_EWC = True
-    config.EWC_IMPORTANCE = 1000
+
     config.L1_REG = 0
     config.IS_CONVOLUTIONAL = False
     print(config)
