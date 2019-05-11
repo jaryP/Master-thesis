@@ -10,7 +10,7 @@ config = {
 
     },
 
-    'ewc': {
+    'cont_learn_tec': {
 
         'importance': 1000,
         'sample_size': 250

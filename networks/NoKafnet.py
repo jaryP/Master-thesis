@@ -4,6 +4,9 @@ from networks.net_utils import AbstractNetwork
 
 
 class CNN(AbstractNetwork):
+    def embedding(self, x):
+        pass
+
     def build_net(self):
         self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
         self.batchnorm1 = nn.BatchNorm2d(32)
@@ -38,20 +41,26 @@ class MLP(AbstractNetwork):
         super(MLP, self).__init__(num_task)
         self.build_net(hidden_size=hidden_size)
 
-    def forward(self, input):
-        x = F.relu(self.fc1(input))
-        x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x))
-        x = self.fc4(x)
-        return x
-
     def build_net(self, *args, **kwargs):
         hidden_size = kwargs['hidden_size']
         self.fc1 = nn.Linear(28 * 28, hidden_size)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.fc3 = nn.Linear(hidden_size, hidden_size)
-        self.fc4 = nn.Linear(hidden_size, self.output_size)
+        self.proj = nn.Linear(hidden_size, self.output_size)
 
     def eval_forward(self, x, task=None):
         x = self.forward(x)
         return (nn.functional.softmax(x, dim=1).max(dim=1)[1]).cpu().detach().numpy()
+
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = F.relu(self.fc3(x))
+        x = self.proj(x)
+        return x
+
+    def embedding(self, x):
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = F.relu(self.fc3(x))
+        return x

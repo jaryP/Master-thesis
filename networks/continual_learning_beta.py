@@ -1,13 +1,18 @@
 import quadprog
+import torch
 import torch.nn as nn
 from copy import deepcopy
 from networks.net_utils import AbstractNetwork
 from utils.datasetsUtils.dataset import GeneralDatasetLoader
 import torch.nn.functional as F
 import random
-from torch import stack, cat, mm, Tensor, clamp, zeros_like, from_numpy, unsqueeze, matmul, mul, abs, div
+from torch import stack, cat, mm, Tensor, clamp, zeros_like, from_numpy, unsqueeze, matmul, mul, abs, div, optim
 import numpy as np
 from scipy.stats import multivariate_normal
+from sklearn.metrics.pairwise import euclidean_distances, cosine_similarity
+from scipy.spatial.distance import euclidean, pdist, cdist
+import matplotlib.pyplot as plt
+from torch.autograd import grad
 
 
 class Bayesian(object):
@@ -208,6 +213,7 @@ class SI(object):
         self.w0 = 0.00001
         self.w = 0.005
         self.eps = 1e-7
+
 
         self.is_conv = config.IS_CONVOLUTIONAL
         self.device = config.DEVICE
@@ -712,3 +718,179 @@ class JaryGEM(object):
                     # continue
 
         return loss
+
+
+class embedding(object):
+    def __init__(self, model: AbstractNetwork, dataset: GeneralDatasetLoader, config):
+
+        self.model = model
+        self.dataset = dataset
+
+        self.encoder = torch.nn.Sequential(
+            torch.nn.Linear(28*28, 300),
+            torch.nn.ReLU(),
+            torch.nn.Linear(300, 200),
+            torch.nn.ReLU(),
+            torch.nn.Linear(200, 100),
+            # torch.nn.ReLU(),
+            # torch.nn.linear(100 * 28, 200),
+        ).to(config.DEVICE)
+
+        def hook(module, input, output):
+            setattr(module, "_value_hook", output)
+
+        for n, m in self.model.named_modules():
+            if n != 'proj':
+                m.register_forward_hook(hook)
+
+        self.is_conv = config.IS_CONVOLUTIONAL
+        self.device = config.DEVICE
+        self.sample_size = config.EWC_SAMPLE_SIZE
+        self.gamma = config.GAMMA
+        self.batch_size = config.BATCH_SIZE
+        self._current_task = 0
+        self.sample_size_task = 0
+
+        # self.margin = config.EWC_IMPORTANCE
+
+        self.tasks = set()
+
+        self.embeddings = None
+        self.embeddings_labels = []
+
+    def __call__(self, *args, **kwargs):
+        current_task = kwargs['current_task']
+        current_batch = kwargs['batch']
+        penalty = 0
+        # self.train_step(current_batch)
+        if current_task > 0:
+            # self.embedding_save(current_task)
+            penalty = self.penalty(current_task, current_batch)
+        return self, penalty
+
+    def embedding_save(self, current_task):
+        if current_task-1 not in self.tasks:
+            self.tasks.add(current_task-1)
+
+            self.model.eval()
+
+            self.dataset.train_phase()
+            it = self.dataset.getIterator(self.sample_size, task=current_task-1)
+            labels = [current_task-1] * self.sample_size
+            self.embeddings_labels.extend(labels)
+
+            images, _ = next(it)
+            # for (images, _) in it:
+
+            input = images.to(self.device)
+
+            if self.is_conv:
+                output = self.encoder(input)
+            else:
+                output = self.encoder(input)
+
+            embeddings = output.cpu().detach().numpy()
+            if self.embeddings is None:
+                self.embeddings = embeddings
+            else:
+                self.embeddings = np.concatenate((self.embeddings, embeddings), 0)
+
+    def train_step(self, current_batch):
+        x = current_batch[0]
+        y = self.decoder(self.encoder(x))
+        self.optimizer.zero_grad()
+        loss = self.loss(y, x)
+        loss.backward()
+        self.optimizer.step()
+
+    def penalty(self, current_task, current_batch):
+
+        self.model.eval()
+
+        self.dataset.train_phase()
+        # it = self.dataset.getIterator(self.batch_size, task=current_task)
+        #
+        # images, _ = next(it)
+        # # for (images, _) in it:
+        #
+        # i = images.to(self.device)
+        #
+        # if self.is_conv:
+        #     i = self.encoder(i)
+        # else:
+        #     i = self.encoder(i)
+
+        # embeddings = i.cpu().detach().numpy()
+        #
+        # if self.embeddings is None:
+        #     self.embeddings = embeddings
+        # else:
+        #     self.embeddings = np.concatenate((self.embeddings, embeddings), 0)
+
+        old_tasks = []
+        for sub_task in range(current_task):
+            self.dataset.train_phase()
+            it = self.dataset.getIterator(self.sample_size, task=sub_task)
+
+            images, _ = next(it)
+
+            old_tasks.extend([images[i] for i in range(len(images))])
+
+        images = torch.stack(random.sample(old_tasks, k=self.batch_size), 0).to(self.device)
+
+        with torch.no_grad():
+            embeddings = self.encoder(images).cpu().numpy()
+            W = 1-euclidean_distances(embeddings, embeddings)
+
+        forward = self.model.embedding(images)
+
+            # tot_p = []
+            # for n, p in self.model.named_modules():
+            #     if hasattr(p, '_value_hook'):
+            #         # print(n, getattr(p, '_value_hook'))
+            #         forward = getattr(p, '_value_hook').cpu().numpy()
+            #
+            #         X = np.matmul(forward, forward.T)
+            #         m = np.diag(X)
+            #         m = np.matmul(np.expand_dims(m, -1), np.ones((1, len(forward))))
+            #         d = m + m.T - 2 * X
+            #         d *= W
+            #
+            #         p = np.max(d, 1)
+            #         p = np.mean(p)
+            #         tot_p.append(p)
+        # dis = torch.nn.PairwiseDistance()
+        # d = dis(forward, forward)
+
+        x_norm = (forward**2).sum(1).view(-1, 1)
+        dist = x_norm + x_norm.view(1, -1) - 2.0 * torch.mm(forward, torch.transpose(forward, 0, 1))
+
+        # print(dist.size())
+        # X = np.matmul(forward, forward.T)
+        # m = np.diag(X)
+        # m = np.matmul(np.expand_dims(m, -1), np.ones((1, len(forward))))
+        # d = m + m.T - 2 * X
+        dist = torch.mul(dist, from_numpy(W).float().to(self.device))
+        # print(dist)
+        # print(tot_p)
+        # a = torch.tensor(torch.tensor(np.mean(d, keepdims=True), requires_grad=True)).float()
+        # t = torch.Tensor(a)
+        # t.backward()
+        mx = torch.max(dist, 1)[0]
+        mn = torch.mean(mx)
+        # mn.backward()
+        for n, p in self.model.named_parameters():
+            if p.requires_grad:
+                # mx = torch.max(dist, 1)[0]
+                g = grad(mn, p, allow_unused=True, retain_graph=True)[0]
+                # print(n, g)
+                if g is None:
+                    continue
+                p.grad.sub_(g*1e-4)
+                # print(n, loss)
+
+        # print(t.grad_fn)
+        # getBack(t.grad_fn)
+        return 0
+
+
