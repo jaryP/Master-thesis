@@ -46,7 +46,7 @@ class MLP(AbstractNetwork):
         self.fc1 = nn.Linear(28 * 28, hidden_size)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.fc3 = nn.Linear(hidden_size, hidden_size)
-        self.proj = nn.Linear(hidden_size, self.output_size)
+        self.fc4 = nn.Linear(hidden_size, self.output_size)
 
     def eval_forward(self, x, task=None):
         x = self.forward(x)
@@ -56,7 +56,7 @@ class MLP(AbstractNetwork):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = F.relu(self.fc3(x))
-        x = self.proj(x)
+        x = self.fc4(x)
         return x
 
     def embedding(self, x):

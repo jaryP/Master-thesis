@@ -756,16 +756,20 @@ class embedding(object):
         self.tasks = set()
 
         self.embeddings = None
-        self.embeddings_labels = []
+        self.embeddings_images = None
+        self.w = []
+        self.embeddings_images = []
 
     def __call__(self, *args, **kwargs):
         current_task = kwargs['current_task']
         current_batch = kwargs['batch']
         penalty = 0
         # self.train_step(current_batch)
+        # self.embedding_save(current_task)
         if current_task > 0:
-            # self.embedding_save(current_task)
-            penalty = self.penalty(current_task, current_batch)
+            self.embedding_save(current_task)
+            self.penalty_1()
+        #     penalty = self.penalty(current_task, current_batch)
         return self, penalty
 
     def embedding_save(self, current_task):
@@ -773,27 +777,29 @@ class embedding(object):
             self.tasks.add(current_task-1)
 
             self.model.eval()
-
             self.dataset.train_phase()
+
             it = self.dataset.getIterator(self.sample_size, task=current_task-1)
-            labels = [current_task-1] * self.sample_size
-            self.embeddings_labels.extend(labels)
+            # labels = [current_task-1] * self.sample_size
+            # self.embeddings_labels.extend(labels)
+            self.w.extend([1] * self.sample_size)
 
             images, _ = next(it)
             # for (images, _) in it:
 
             input = images.to(self.device)
+            with torch.no_grad():
+                output = self.model.embedding(input)
 
-            if self.is_conv:
-                output = self.encoder(input)
-            else:
-                output = self.encoder(input)
+                embeddings = output.cpu()
+                if self.embeddings is None:
+                    self.embeddings = embeddings
+                    self.embeddings_images = images
+                else:
+                    self.embeddings = torch.cat((self.embeddings, embeddings), 0)
+                    self.embeddings_images = torch.cat((self.embeddings_images, images), 0)
 
-            embeddings = output.cpu().detach().numpy()
-            if self.embeddings is None:
-                self.embeddings = embeddings
-            else:
-                self.embeddings = np.concatenate((self.embeddings, embeddings), 0)
+            print(self.embeddings.size(), self.embeddings_images.size())
 
     def train_step(self, current_batch):
         x = current_batch[0]
@@ -802,6 +808,38 @@ class embedding(object):
         loss = self.loss(y, x)
         loss.backward()
         self.optimizer.step()
+
+    def penalty_1(self):
+        self.model.eval()
+        idx = range(self.embeddings_images.size()[0])
+        idx = random.choices(idx, k=self.batch_size, weights=self.w)
+
+        img = self.embeddings_images[idx].to(self.device)
+        embeddings = self.embeddings[idx].to(self.device)
+
+        new_embeddings = self.model.embedding(img)
+
+        # d = torch.bmm(embeddings.unsqueeze(1), new_embeddings.unsqueeze(-1))
+
+        # x = embeddings / embeddings.norm(dim=1)[:, None]
+        # y = new_embeddings / new_embeddings.norm(dim=1)[:, None]
+        # dist = torch.mm(x, y.transpose(0, 1))
+        cosine = torch.nn.functional.cosine_similarity(embeddings, new_embeddings)
+        dist = 1-cosine
+        # print(cosine)
+        # print(dist)
+
+        dist.mean().backward()
+
+        dist = dist.detach().cpu().numpy()
+        # print(dist)
+        # print(self.w)
+        for j, i in enumerate(idx):
+            self.w[i] = dist[j]
+        # print(self.w)
+        # input()
+        # print(dist.size())
+        # print(dist.min())
 
     def penalty(self, current_task, current_batch):
 
@@ -828,67 +866,107 @@ class embedding(object):
         #     self.embeddings = np.concatenate((self.embeddings, embeddings), 0)
 
         old_tasks = []
+        tot_loss = 0
+        self.dataset.train_phase()
+
         for sub_task in range(current_task):
-            self.dataset.train_phase()
-            it = self.dataset.getIterator(self.sample_size, task=sub_task)
+            it = self.dataset.getIterator(self.batch_size, task=sub_task)
 
             images, _ = next(it)
+            images = images.to(self.device)
 
-            old_tasks.extend([images[i] for i in range(len(images))])
+            # old_tasks.extend([images[i] for i in range(len(images))])
 
-        images = torch.stack(random.sample(old_tasks, k=self.batch_size), 0).to(self.device)
+            # images = torch.stack(random.sample(old_tasks, k=self.sample_size), 0).to(self.device)
 
-        with torch.no_grad():
-            embeddings = self.encoder(images).cpu().numpy()
-            W = 1-euclidean_distances(embeddings, embeddings)
+            # with torch.no_grad():
+            #     embeddings = self.encoder(images).cpu().numpy()
+            #     W = np.exp(-(euclidean_distances(embeddings, embeddings)))
+            # print(W)
+            forward = self.model.embedding(images)
+            forward_b = self.model.embedding(current_batch[0])
 
-        forward = self.model.embedding(images)
+                # tot_p = []
+                # for n, p in self.model.named_modules():
+                #     if hasattr(p, '_value_hook'):
+                #         # print(n, getattr(p, '_value_hook'))
+                #         forward = getattr(p, '_value_hook').cpu().numpy()
+                #
+                #         X = np.matmul(forward, forward.T)
+                #         m = np.diag(X)
+                #         m = np.matmul(np.expand_dims(m, -1), np.ones((1, len(forward))))
+                #         d = m + m.T - 2 * X
+                #         d *= W
+                #
+                #         p = np.max(d, 1)
+                #         p = np.mean(p)
+                #         tot_p.append(p)
+            # dis = torch.nn.PairwiseDistance()
+            # d = dis(forward, forward)
 
-            # tot_p = []
-            # for n, p in self.model.named_modules():
-            #     if hasattr(p, '_value_hook'):
-            #         # print(n, getattr(p, '_value_hook'))
-            #         forward = getattr(p, '_value_hook').cpu().numpy()
-            #
-            #         X = np.matmul(forward, forward.T)
-            #         m = np.diag(X)
-            #         m = np.matmul(np.expand_dims(m, -1), np.ones((1, len(forward))))
-            #         d = m + m.T - 2 * X
-            #         d *= W
-            #
-            #         p = np.max(d, 1)
-            #         p = np.mean(p)
-            #         tot_p.append(p)
-        # dis = torch.nn.PairwiseDistance()
-        # d = dis(forward, forward)
+            # EUCLIDEAN DISTANCEs
+            # x_norm = (forward_b**2).sum(1).view(-1, 1)
+            # y_norm = (forward**2).sum(1).view(1, -1)
+            # dist = x_norm + y_norm - 2.0 * torch.mm(forward_b, torch.transpose(forward, 0, 1))
 
-        x_norm = (forward**2).sum(1).view(-1, 1)
-        dist = x_norm + x_norm.view(1, -1) - 2.0 * torch.mm(forward, torch.transpose(forward, 0, 1))
+            # COSINE SIMILARITY
+            x = forward_b / forward_b.norm(dim=1)[:, None]
+            y = forward / forward.norm(dim=1)[:, None]
+            dist = torch.mm(x, y.transpose(0, 1))
+            # print(torch.sum((dist < 0).int()))
+            # dist = torch.mm(forward_b, torch.transpose(forward, 0, 1))
+            # dist = torch.mm(forward_b.t(), forward)
+            # dist /= x_norm / y_norm.t()
+            # dist /= torch.mm(x_norm, y_norm)
 
-        # print(dist.size())
-        # X = np.matmul(forward, forward.T)
-        # m = np.diag(X)
-        # m = np.matmul(np.expand_dims(m, -1), np.ones((1, len(forward))))
-        # d = m + m.T - 2 * X
-        dist = torch.mul(dist, from_numpy(W).float().to(self.device))
-        # print(dist)
-        # print(tot_p)
-        # a = torch.tensor(torch.tensor(np.mean(d, keepdims=True), requires_grad=True)).float()
-        # t = torch.Tensor(a)
-        # t.backward()
-        mx = torch.max(dist, 1)[0]
-        mn = torch.mean(mx)
-        # mn.backward()
-        for n, p in self.model.named_parameters():
-            if p.requires_grad:
-                # mx = torch.max(dist, 1)[0]
-                g = grad(mn, p, allow_unused=True, retain_graph=True)[0]
-                # print(n, g)
-                if g is None:
-                    continue
-                p.grad.sub_(g*1e-4)
-                # print(n, loss)
+            # print(dist.size())
+            # print(dist.size(), (x_norm / y_norm.t()).size())
+            # print(dist)
 
+            # print(dist)
+            # print(dist.size())
+            # X = np.matmul(forward, forward.T)
+            # m = np.diag(X)
+            # m = np.matmul(np.expand_dims(m, -1), np.ones((1, len(forward))))
+            # d = m + m.T - 2 * X
+
+            # dist = torch.mul(dist, from_numpy(W).float().to(self.device))
+
+            # print(dist)
+            # print(tot_p)
+            # a = torch.tensor(torch.tensor(np.mean(d, keepdims=True), requires_grad=True)).float()
+            # t = torch.Tensor(a)
+            # t.backward()
+            mx = torch.mean(dist, 1)
+            # print(mx)
+            mx = 1 - mx
+            # print(mx)
+            # print(mx)
+            # mx = torch.log1p(mx)
+            # print(mx)
+            mn = -torch.log(torch.mean(mx))
+            # mn.backward()
+
+            # mn.backward()
+            # print(sub_task, mn)
+            # w = 1 ** -sub_task
+            # print(sub_task, w)
+            tot_loss += mn #* (1 / (sub_task+1))
+
+        tot_loss.backward()
+        # mn = torch.log(tot_loss)
+        # # print(mn)
+        # # mn.backward()
+        #     for n, p in self.model.named_parameters():
+        #         if p.requires_grad:
+        #             # mx = torch.max(dist, 1)[0]
+        #             g = grad(mn, p, allow_unused=True, retain_graph=True)[0]
+        #             # print(n, g)
+        #             if g is None:
+        #                 continue
+        #             p.grad.add_(g)
+                    # print(n, loss)
+        # print(tot_loss)
         # print(t.grad_fn)
         # getBack(t.grad_fn)
         return 0

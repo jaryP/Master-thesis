@@ -98,6 +98,9 @@ class Trainer:
                     for sub_task in range(current_task):
                         self.evaluate(sub_task)
 
+                # for t, v in self.metrics_calculator.metrics['tasks'].items():
+                #     print(t, v['accuracy'][-self.config.EPOCHS:])
+
                 self.dataset.task = current_task
 
             if self.dataset.tasks_number > 1:
@@ -263,10 +266,10 @@ if __name__ == '__main__':
 
     config = OnlineLearningConfig()
     # config.DEVICE = 'cpu'
-    config.EPOCHS = 2
+    config.EPOCHS = 5
     config.LR = 1e-3
-    config.EWC_IMPORTANCE = 1/100
-    config.EWC_SAMPLE_SIZE = 36
+    config.EWC_IMPORTANCE = 100
+    config.EWC_SAMPLE_SIZE = 100
     config.EWC_TYPE = embedding
     config.USE_EWC = True
 

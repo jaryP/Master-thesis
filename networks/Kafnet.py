@@ -63,7 +63,7 @@ class KAFMLP(AbstractNetwork):
         self.fc1 = nn.Linear(28 * 28, hidden_size)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.fc3 = nn.Linear(hidden_size, hidden_size)
-        self.proj = nn.Linear(hidden_size, self.output_size)
+        self.fc4 = nn.Linear(hidden_size, self.output_size)
         self.kaf1 = KAF(hidden_size, init_fcn=kaf_init_fcn, D=D, trainable_dict=trainable_dict, kernel=kernel)
         self.kaf2 = KAF(hidden_size, init_fcn=kaf_init_fcn, D=D, trainable_dict=trainable_dict, kernel=kernel)
         self.kaf3 = KAF(hidden_size, init_fcn=kaf_init_fcn, D=D, trainable_dict=trainable_dict, kernel=kernel)
@@ -76,7 +76,7 @@ class KAFMLP(AbstractNetwork):
         x = self.kaf1(self.fc1(x))
         x = self.kaf2(self.fc2(x))
         x = self.kaf3(self.fc3(x))
-        x = self.proj(x)
+        x = self.fc4(x)
         return x
 
     def embedding(self, x):
