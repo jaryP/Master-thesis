@@ -86,6 +86,10 @@ class AbstractNetwork(ABC, nn.Module):
     def eval_forward(self, x):
         pass
 
+    @abstractmethod
+    def embedding(self, x):
+        pass
+
     @property
     def task(self):
         return self._task

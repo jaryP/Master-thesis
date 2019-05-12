@@ -9,6 +9,7 @@ from os.path import join
 import numpy as np
 import torch
 import random
+from scipy.ndimage import rotate
 
 
 class MINST(utils.datasetsUtils.dataset.GeneralDatasetLoader):
@@ -280,5 +281,57 @@ class PermutedMINST(MINST):
         idx = list(range(shape))
 
         for i in range(self.n_permutation):
-            random.shuffle(idx)
             self.permuted_index.append([idx.copy()])
+            random.shuffle(idx)
+
+
+class RotatedMINST(MINST):
+    def __init__(self, folder: str, train_split: float = 0.9,
+                 transform=None, target_transform=None, download=False,
+                 force_download=False, n_rotations=2):
+
+        super().__init__(folder, DuplicatetNoTask(n_rotations), train_split, transform, target_transform, download, force_download)
+        self.angle = []
+        self.n_rotations = n_rotations
+        self._n_task = n_rotations
+
+    def __getitem__(self, index):
+
+        if isinstance(index, list) or isinstance(index, tuple):
+            index, task = index
+        else:
+            task = self.task
+
+        t = self.task2idx[task][self._phase]
+        img = self.X[t['x'][index]]
+        angle = self.angle[task]
+        # img = img[self.permuted_index[task]]
+        target = t['y'][index]
+
+        img = rotate(img.reshape(28, 28), angle, reshape=False).reshape(-1)
+
+        img = torch.from_numpy(img).float()
+
+        if self.transform is not None:
+            img = self.transform(img)
+
+        if isinstance(target, int):
+            target = [target]
+
+        target = np.asarray(target, dtype=np.int64)
+
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+        else:
+            target = torch.from_numpy(target)
+
+        return img, target
+
+    def load_dataset(self):
+        super().load_dataset()
+
+        self.X = [x/255 for x in self.X]
+        self.angle.append(0)
+
+        for i in range(1, self.n_rotations):
+            self.angle.append(random.uniform(-180, 180))

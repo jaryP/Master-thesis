@@ -30,13 +30,12 @@ class Trainer:
         if config.DEVICE != 'cpu':
             self.model.to(self.device)
 
-        self.ewc = None
+        self.cont_learn_tec = None
         if config.USE_EWC:
             if config.EWC_TYPE is None:
-                self.ewc = None
                 warnings.warn("Ewc type is set to None  ")
             else:
-                self.ewc = config.EWC_TYPE(self.model, self.dataset, config)
+                self.cont_learn_tec = config.EWC_TYPE(self.model, self.dataset, config)
 
         self.results = dict()
 
@@ -83,8 +82,8 @@ class Trainer:
 
             losses = []
 
-            # if (current_task > 0) and self.ewc is not None:
-            #     self.ewc(current_task=current_task)
+            # if (current_task > 0) and self.cont_learn_tec is not None:
+            #     self.cont_learn_tec(current_task=current_task)
 
             self.dataset.task = current_task
             self.model.task = current_task
@@ -99,6 +98,9 @@ class Trainer:
                     for sub_task in range(current_task):
                         self.evaluate(sub_task)
 
+                # for t, v in self.metrics_calculator.metrics['tasks'].items():
+                #     print(t, v['accuracy'][-self.config.EPOCHS:])
+
                 self.dataset.task = current_task
 
             if self.dataset.tasks_number > 1:
@@ -107,10 +109,6 @@ class Trainer:
 
             losses_per_task[current_task] = losses
             has_next_task = self.dataset.next_task(round_robin=False)
-
-            a = self.metrics_calculator.metrics
-            for k, v in a['tasks'].items():
-                print(k, v['accuracy'])
 
             if self.save_modality >= 2:
                 state_dict = {}
@@ -149,8 +147,8 @@ class Trainer:
 
         it = tqdm(self.dataset.getIterator(self.config.BATCH_SIZE), total=len(self.dataset)//self.config.BATCH_SIZE)
 
-        if self.ewc is not None:
-            it.set_description("Training task (ewc) {}, epoch {}".format(self.dataset.task, n+1))
+        if self.cont_learn_tec is not None:
+            it.set_description("Training task (cont_learn) {}, epoch {}".format(self.dataset.task, n+1))
         else:
             it.set_description("Training task {}, epoch {}".format(self.dataset.task, n+1))
 
@@ -173,23 +171,22 @@ class Trainer:
 
             loss.backward(retain_graph=True)
 
-            if self.ewc is not None:
+            if self.cont_learn_tec is not None:
                 if self.dataset.task > 0:
                     a = 0
-                self.ewc, penalty = self.ewc(current_task=self.dataset.task)
-
+                self.cont_learn_tec, penalty = self.cont_learn_tec(current_task=self.dataset.task, batch=(x, y))
                 if penalty != 0:
-                    loss = loss + self.config.EWC_IMPORTANCE * penalty.to(self.config.DEVICE)
+                    loss = loss + self.config.EWC_IMPORTANCE * penalty.to(self.config.DEVICE).float()
                     self.optimizer.zero_grad()
                     loss.backward(retain_graph=True)
 
-            clip_grad_norm_(self.model.parameters(), 20)
+            # clip_grad_norm_(self.model.parameters(), 20)
             self.optimizer.step()
 
             epoch_loss_full += loss.detach().item()
             i += 1
 
-            if self.ewc is None:
+            if self.cont_learn_tec is None:
                 it.set_postfix({'loss': epoch_loss_full/i,
                                 'batch#': i})
             else:
@@ -244,7 +241,7 @@ if __name__ == '__main__':
 
     from utils.datasetsUtils.taskManager import SingleTargetClassificationTask, NoTask
     from networks.continual_learning import GEM
-    from networks.continual_learning_beta import JaryGEM
+    from networks.continual_learning_beta import JaryGEM, embedding
     from configs.configClasses import DefaultConfig, OnlineLearningConfig
     from torchvision.transforms import transforms
 
@@ -269,11 +266,11 @@ if __name__ == '__main__':
 
     config = OnlineLearningConfig()
     # config.DEVICE = 'cpu'
-    config.EPOCHS = 1
+    config.EPOCHS = 5
     config.LR = 1e-3
-    config.EWC_IMPORTANCE = 0
-    config.EWC_SAMPLE_SIZE = 200
-    config.EWC_TYPE = JaryGEM
+    config.EWC_IMPORTANCE = 100
+    config.EWC_SAMPLE_SIZE = 100
+    config.EWC_TYPE = embedding
     config.USE_EWC = True
 
     config.L1_REG = 0
@@ -282,7 +279,6 @@ if __name__ == '__main__':
 
     trainer = Trainer(net, dataset, config)
     a = trainer.all_tasks()
-    print(a['tasks'])
     for k, v in a['tasks'].items():
         print(k, v['accuracy'])
 
