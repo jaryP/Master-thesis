@@ -795,11 +795,11 @@ class embedding(object):
                 if self.embeddings is None:
                     self.embeddings = embeddings
                     self.embeddings_images = images
+                    self.w = [1] * self.sample_size
                 else:
                     self.embeddings = torch.cat((self.embeddings, embeddings), 0)
                     self.embeddings_images = torch.cat((self.embeddings_images, images), 0)
-
-            print(self.embeddings.size(), self.embeddings_images.size())
+                    self.w = [1] * self.embeddings.size()[0]
 
     def train_step(self, current_batch):
         x = current_batch[0]

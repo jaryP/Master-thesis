@@ -32,10 +32,10 @@ class Trainer:
 
         self.cont_learn_tec = None
         if config.USE_EWC:
-            if config.EWC_TYPE is None:
+            if config.CL_TEC is None:
                 warnings.warn("Ewc type is set to None  ")
             else:
-                self.cont_learn_tec = config.EWC_TYPE(self.model, self.dataset, config)
+                self.cont_learn_tec = config.CL_TEC(self.model, self.dataset, config)
 
         self.results = dict()
 
@@ -264,13 +264,15 @@ if __name__ == '__main__':
     # net = Kafnet.MultiKAFMLP(len(dataset.class_to_idx), hidden_size=int(400*0.7),# kaf_init_fcn=None,
     #                          kernels=['gaussian'])
 
+    print(DefaultConfig())
+
     config = OnlineLearningConfig()
-    # config.DEVICE = 'cpu'
-    config.EPOCHS = 5
+    config.DEVICE = 'cpu'
+    config.EPOCHS = 1
     config.LR = 1e-3
-    config.EWC_IMPORTANCE = 100
+    config.EWC_IMPORTANCE = 0.5
     config.EWC_SAMPLE_SIZE = 100
-    config.EWC_TYPE = embedding
+    config.EWC_TYPE = GEM
     config.USE_EWC = True
 
     config.L1_REG = 0

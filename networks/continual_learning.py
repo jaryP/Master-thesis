@@ -344,18 +344,18 @@ class GEM(object):
                 done = True
                 # print(a)
                 # del a
-                cg = cg.unsqueeze(1).cpu().contiguous().numpy().astype(np.double)#.astype(np.float16)
+                cg_np = cg.unsqueeze(1).cpu().contiguous().numpy().astype(np.double)#.astype(np.float16)
                 tg = tg.numpy().transpose().astype(np.double)#.astype(np.float16)
 
-                v = self._qp(tg, cg)
+                v = self._qp(tg, cg_np)
 
-                cg += np.expand_dims(np.dot(v, tg), 1)
+                cg_np += np.expand_dims(np.dot(v, tg), 1)
 
                 del tg
 
                 for name, p in self.model.named_parameters():
                     if name == n:
-                        cg.grad.data.copy_(Tensor(cg).view(p.size()))
+                        p.grad.data.copy_(from_numpy(cg_np).view(p.size()))
 
         return done
 

@@ -14,7 +14,9 @@ class DefaultConfig(object):
     EWC_SAMPLE_SIZE = 250
     EWC_IMPORTANCE = 1000
     USE_EWC = True
-    EWC_TYPE = continual_learning.RealEWC
+
+    CL_TEC = continual_learning.RealEWC
+    CL_PAR = {'sample_size': 250, 'penalty_importance': 1e+3}
 
     USE_TENSORBOARD = True
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -35,15 +37,18 @@ class DefaultConfig(object):
 
 
 class OnlineLearningConfig(DefaultConfig):
-    EWC_TYPE = continual_learning.OnlineEWC
+    CL_TEC = continual_learning.OnlineEWC
     GAMMA = 1.0
+    CL_PAR = {'sample_size': 250, 'penalty_importance': 1e+3, 'gamma': 1}
 
 
 class RealEwc(DefaultConfig):
-    EWC_TYPE = continual_learning.RealEWC
+    CL_TEC = continual_learning.RealEWC
 
 
 class GEM(DefaultConfig):
-    EWC_TYPE = continual_learning.GEM
+    CL_TEC = continual_learning.GEM
     EWC_IMPORTANCE = 0.5
+    CL_PAR = {'margin': 0.5}
+    # super.CL_TEC_PARAMETERS['margin'] = 0.5
 

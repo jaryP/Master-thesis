@@ -73,13 +73,10 @@ def fwt(r):
 
 def total_accuracy(r):
     n = r.shape[0]
-    v = 0
 
-    for i in range(n):
-        for j in range(i, n):
-            v += r[i][j]
+    tr = np.triu(r)
+    v = tr.sum() / ((n * (n + 1)) / 2)
 
-    v = v / ((n * (n + 1)) / 2)
     return v
 
 
