@@ -35,6 +35,7 @@ class MetricsHolder:
         self._metrics['fwt'] = fwt(self._r)
         self._metrics['bwt'], self._metrics['remembering'], self._metrics['pbwt'] = bwt(self._r)
         self._metrics['accuracy'] = total_accuracy(self._r)
+        self._metrics['final_accuracy'] = task_final_accuracy(self._r)
 
         return {'metrics':  json.loads(json.dumps(self._metrics)), 'tasks':  json.loads(json.dumps(self._tasks))}
 
@@ -80,19 +81,12 @@ def total_accuracy(r):
     return v
 
 
+def task_final_accuracy(r):
+    return list(np.diag(r))
+
+
 def accuracy(y_true, y_predicted):
     return accuracy_score(y_true, y_predicted)
-
-#
-# def calculate_all_metrics(y_true, y_predicted):
-#     d = dict()
-#     s = set(y_true)
-#     is_binary = True if len(s) == 2 else True
-#
-#     d['f1'] = f1(y_true, y_predicted, is_binary)
-#     d['accuracy'] = accuracy_score(y_true, y_predicted)
-#
-#     return d
 
 
 def f1(y_true, y_predicted, is_binary=True):

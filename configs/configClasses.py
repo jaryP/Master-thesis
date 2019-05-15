@@ -13,9 +13,9 @@ class DefaultConfig(object):
 
     EWC_SAMPLE_SIZE = 250
     EWC_IMPORTANCE = 1000
-    USE_EWC = True
+    USE_CL = True
 
-    CL_TEC = continual_learning.RealEWC
+    CL_TEC = continual_learning.EWC
     CL_PAR = {'sample_size': 250, 'penalty_importance': 1e+3}
 
     USE_TENSORBOARD = True
@@ -43,7 +43,7 @@ class OnlineLearningConfig(DefaultConfig):
 
 
 class RealEwc(DefaultConfig):
-    CL_TEC = continual_learning.RealEWC
+    CL_TEC = continual_learning.EWC
 
 
 class GEM(DefaultConfig):

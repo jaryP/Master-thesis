@@ -31,7 +31,7 @@ class Trainer:
             self.model.to(self.device)
 
         self.cont_learn_tec = None
-        if config.USE_EWC:
+        if config.USE_CL:
             if config.CL_TEC is None:
                 warnings.warn("Ewc type is set to None  ")
             else:
@@ -176,11 +176,11 @@ class Trainer:
                     a = 0
                 self.cont_learn_tec, penalty = self.cont_learn_tec(current_task=self.dataset.task, batch=(x, y))
                 if penalty != 0:
-                    loss = loss + self.config.EWC_IMPORTANCE * penalty.to(self.config.DEVICE).float()
+                    loss = loss + penalty
                     self.optimizer.zero_grad()
                     loss.backward(retain_graph=True)
 
-            # clip_grad_norm_(self.model.parameters(), 20)
+            clip_grad_norm_(self.model.parameters(), 20)
             self.optimizer.step()
 
             epoch_loss_full += loss.detach().item()
@@ -228,7 +228,6 @@ class Trainer:
             return {}
         else:
             state = load(save_path, map_location=self.device)
-
             self.model.load_state_dict(state['model'])
             results = {'metrics': state['metrics'], 'tasks': state['tasks'], 'losses': state['losses']}
             return results
@@ -259,8 +258,8 @@ if __name__ == '__main__':
     #                       force_download=False, train_split=0.8, transform=None, target_transform=None)
     dataset.load_dataset()
 
-    # net = NoKafnet.MLP(len(dataset.class_to_idx))
-    net = Kafnet.KAFMLP(len(dataset.class_to_idx), hidden_size=int(400*0.7), kernel='gaussian', kaf_init_fcn=None)
+    net = NoKafnet.MLP(len(dataset.class_to_idx), hidden_size=100)
+    # net = Kafnet.KAFMLP(len(dataset.class_to_idx), hidden_size=int(400*0.7), kernel='gaussian', kaf_init_fcn=None)
     # net = Kafnet.MultiKAFMLP(len(dataset.class_to_idx), hidden_size=int(400*0.7),# kaf_init_fcn=None,
     #                          kernels=['gaussian'])
 
@@ -270,10 +269,12 @@ if __name__ == '__main__':
     config.DEVICE = 'cpu'
     config.EPOCHS = 1
     config.LR = 1e-3
-    config.EWC_IMPORTANCE = 0.5
-    config.EWC_SAMPLE_SIZE = 100
-    config.EWC_TYPE = GEM
-    config.USE_EWC = True
+    # config.EWC_IMPORTANCE = 0.5
+    # config.EWC_SAMPLE_SIZE = 100
+    config.CL_TEC = embedding
+    config.USE_CL = True
+    config.CL_PAR.update({'sample_size': 200, 'use_weights': False,
+                          'memory_size': 500, 'weights_type': 'image_similarity'})
 
     config.L1_REG = 0
     config.IS_CONVOLUTIONAL = False
@@ -284,7 +285,7 @@ if __name__ == '__main__':
     for k, v in a['tasks'].items():
         print(k, v['accuracy'])
 
-    # config.USE_EWC = False
+    # config.USE_CL = False
     #
     # dataset.reset()
     # net = NoKafnet.CNN(dataset.tasks_number)

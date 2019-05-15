@@ -1,5 +1,4 @@
 import quadprog
-import torch.nn as nn
 from copy import deepcopy
 from networks.net_utils import AbstractNetwork
 from utils.datasetsUtils.dataset import GeneralDatasetLoader
@@ -10,8 +9,7 @@ import numpy as np
 from scipy.stats import multivariate_normal
 
 
-class RealEWC(object):
-    # An utility object for computing the EWC penalty
+class EWC(object):
 
     def __init__(self, model: AbstractNetwork, dataset: GeneralDatasetLoader, config):
 
@@ -20,7 +18,10 @@ class RealEWC(object):
 
         self.is_conv = config.IS_CONVOLUTIONAL
         self.device = config.DEVICE
-        self.sample_size = config.EWC_SAMPLE_SIZE
+
+        self.sample_size = config.CL_PAR.get('sample_size', 200)
+
+        self.importance = config.CL_PAR.get('penalty_importance', 1e3)
 
         self.params = {n: p for n, p in self.model.named_parameters() if p.requires_grad}
         self._means = {}
@@ -30,6 +31,7 @@ class RealEWC(object):
     def __call__(self, *args, **kwargs):
         self._update_matrix(kwargs['current_task'])
         penality = self._penalty(kwargs['model'])
+        penality *= self.importance
         return self, penality
 
     def _update_matrix(self, current_task):
@@ -100,94 +102,7 @@ class RealEWC(object):
         return loss
 
 
-class EWC(object):
-    # An utility object for computing the EWC penalty
-
-    def __init__(self, model: AbstractNetwork, dataset: GeneralDatasetLoader, config):
-
-        self.model = model
-        self.dataset = dataset
-
-        self.is_conv = config.IS_CONVOLUTIONAL
-        self.device = config.DEVICE
-        self.sample_size = config.EWC_SAMPLE_SIZE
-
-        # self.params = {n: p for n, p in self.model.named_parameters() if p.requires_grad}
-        self.params = None
-        self._means = None
-        # self._means = {}
-        # for n, p in deepcopy(self.params).items():
-        #     self._means[n] = p.to(self.device)
-
-        self._precision_matrices = None
-
-    def __call__(self, *args, **kwargs):
-        self._update_matrix(kwargs['current_task'])
-        return self
-
-    def _update_matrix(self, current_task):
-
-        self.params = {n: p for n, p in self.model.named_parameters() if p.requires_grad}
-
-        self._means = {}
-        for n, p in deepcopy(self.params).items():
-            self._means[n] = p.to(self.device)
-
-        precision_matrices = {}
-        for n, p in deepcopy(self.params).items():
-            p.data.zero_()
-            precision_matrices[n] = p.data
-
-        self.model.eval()
-
-        old_tasks = []
-        for sub_task in range(current_task):
-            self.dataset.train_phase()
-            it = self.dataset.getIterator(self.sample_size, task=sub_task)
-
-            images, _ = next(it)
-
-            old_tasks.extend([(images[i], sub_task) for i in range(len(images))])
-
-        old_tasks = random.sample(old_tasks, k=self.sample_size)
-
-        for (input, task_idx) in old_tasks:
-
-            self.model.zero_grad()
-            self.model.task = task_idx
-            input = input.to(self.device)
-
-            if self.is_conv:
-                output = self.model(input.view(1, input.shape[0], input.shape[1], input.shape[2]))
-            else:
-                output = self.model(input.view(1, -1))
-
-            label = output.max(1)[1].view(-1)
-            loss = F.nll_loss(F.log_softmax(output, dim=1), label)
-            loss.backward()
-
-            for n, p in self.model.named_parameters():
-                precision_matrices[n].data += (p.grad.data ** 2) / len(old_tasks)
-
-        precision_matrices = {n: p for n, p in precision_matrices.items()}
-
-        self._precision_matrices = precision_matrices
-
-    def penalty(self, model: nn.Module):
-        loss = 0
-
-        if self._precision_matrices is None:
-            return 0
-
-        for n, p in model.named_parameters():
-            _loss = self._precision_matrices[n] * (p.to(self.device) - self._means[n]) ** 2
-            loss += _loss.sum()
-
-        return loss
-
-
 class OnlineEWC(object):
-    # An utility object for computing the EWC penalty
 
     def __init__(self, model: AbstractNetwork, dataset: GeneralDatasetLoader, config):
 
@@ -196,8 +111,11 @@ class OnlineEWC(object):
 
         self.is_conv = config.IS_CONVOLUTIONAL
         self.device = config.DEVICE
-        self.sample_size = config.EWC_SAMPLE_SIZE
-        self.gamma = config.GAMMA
+
+        self.sample_size = config.CL_PAR.get('sample_size', 200)
+        self.gamma = config.CL_PAR.get('gamma', 1)
+        self.importance = config.CL_PAR.get('penalty_importance', 1e3)
+
         self._current_task = 0
 
         self.tasks = []
@@ -207,6 +125,7 @@ class OnlineEWC(object):
     def __call__(self, *args, **kwargs):
         self._update_matrix(kwargs['current_task'])
         penality = self._penalty()
+        penality *= self.importance
         return self, penality
 
     def _update_matrix(self, current_task):
@@ -231,7 +150,6 @@ class OnlineEWC(object):
 
         old_tasks = []
 
-        # for sub_task in range(current_task):
         self.dataset.train_phase()
         it = self.dataset.getIterator(self.sample_size, task=current_task-1)
         images, _ = next(it)
@@ -342,8 +260,6 @@ class GEM(object):
 
             if (a < 0).sum() != 0:
                 done = True
-                # print(a)
-                # del a
                 cg_np = cg.unsqueeze(1).cpu().contiguous().numpy().astype(np.double)#.astype(np.float16)
                 tg = tg.numpy().transpose().astype(np.double)#.astype(np.float16)
 
@@ -397,28 +313,6 @@ class GEM(object):
                 flat_size = np.prod(size)#.view(-1)
                 p.grad.data.copy_(Tensor(cg_np[i: i+flat_size]).view(size))
                 i += flat_size
-
-            # cg = []
-            # for n, g in self.model.named_parameters():
-            #     if g.requires_grad:
-            #         cg.append(deepcopy(g.grad.data.view(-1)))
-            # cg = cat(cg, 0)
-            #
-            # tg = []
-            # for t, tgs in self.tasks_gradients.items():
-            #     if t >= current_task:
-            #         continue
-            #     ctg = []
-            #     for n, g in tgs.items():
-            #         ctg.append(g)
-            #     ctg = cat(ctg, 0)
-            #     tg.append(ctg)
-            #
-            # tg = stack(tg, 1)
-            # print(a)
-            # a = mm(cg.unsqueeze(0), tg)
-            # print(a)
-            # print()
             return True
         else:
             return False
@@ -439,8 +333,6 @@ class GEM(object):
             self.model.zero_grad()
 
             for images, label in self.dataset.getIterator(10, task=sub_task):
-                # it = self.dataset.getIterator(32, task=sub_task)
-                # images, _ = next(it)
 
                 input = images.to(self.device)
                 label = label.to(self.device)
@@ -448,9 +340,7 @@ class GEM(object):
                 if self.is_conv:
                     output = self.model(input.view(1, input.shape[0], input.shape[1], input.shape[2]))
                 else:
-                    output = self.model(input)#.view(1, -1))
-
-                # label = output.max(1)[1].view(-1)
+                    output = self.model(input)
 
                 loss = F.nll_loss(F.log_softmax(output, dim=1), label)
                 loss.backward()

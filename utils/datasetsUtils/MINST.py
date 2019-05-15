@@ -33,9 +33,6 @@ class MINST(utils.datasetsUtils.dataset.GeneralDatasetLoader):
 
         self.transform = transform
 
-        # if transform is None:
-        #     self.transform = transforms.Compose([transforms.ToTensor()])
-
         self.target_transform = target_transform
 
         self._phase = 'train'
@@ -305,7 +302,6 @@ class RotatedMINST(MINST):
         t = self.task2idx[task][self._phase]
         img = self.X[t['x'][index]]
         angle = self.angle[task]
-        # img = img[self.permuted_index[task]]
         target = t['y'][index]
 
         img = rotate(img.reshape(28, 28), angle, reshape=False).reshape(-1)
