@@ -173,6 +173,7 @@ class synCNN(AbstractNetwork):
             topology = [32, 64]
 
         self.topology = topology
+        self.incremental = incremental
 
         self.features = self.build_net()
 

@@ -111,13 +111,14 @@ class CNN(AbstractNetwork):
         return layers
 
     def __init__(self, num_tasks, D=10, kernel='softplus', trainable_dict=False, alpha_mean=0, alpha_std=0,
-                 boundary=3, positive_dict=False, init_fcn=elu, topology=None):
+                 boundary=3, positive_dict=False, init_fcn=elu, topology=None, incremental=False):
         super(CNN, self).__init__(outputs=num_tasks)
 
         if topology is None:
             topology = [32, 32, 'M', 64, 64, 'M']
 
         self.topology = topology
+        self.incremental = incremental
 
         self.features = self.build_net(D=D, kernel=kernel, trainable_dict=trainable_dict, alpha_std=alpha_std,
                                        alpha_mean=alpha_mean,
@@ -139,10 +140,16 @@ class CNN(AbstractNetwork):
         # x = self.features_processing(x)
         x = self.classification_layer(x)
 
-        if isinstance(self._task, (list, tuple, set)):
-            mask = np.zeros(self.output_size)
-            for i in self._task:
+        mask = np.zeros(self.output_size)
+        if self.incremental:
+            for i in self._used_tasks:
                 mask[i] = 1
+        else:
+            if isinstance(self._task, (list, tuple, set)):
+                for i in self._task:
+                    mask[i] = 1
+
+        if mask.sum() != 0:
             x = x * from_numpy(mask).float().to(x.device)
 
         return x
@@ -153,6 +160,18 @@ class CNN(AbstractNetwork):
         # x = self.features_processing(x)
         x = self.classification_layer(x)
 
+        mask = np.zeros(self.output_size)
+        if self.incremental:
+            for i in self._used_tasks:
+                mask[i] = 1
+        else:
+            if isinstance(self._task, (list, tuple, set)):
+                for i in self._task:
+                    mask[i] = 1
+
+        if mask.sum() != 0:
+            x = x * from_numpy(mask).float().to(x.device)
+            
         return nn.functional.softmax(x, dim=1).max(dim=1)[1]
 
     def embedding(self, x):
