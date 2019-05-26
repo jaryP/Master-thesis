@@ -1,15 +1,20 @@
 import torch
 import networks.continual_learning as continual_learning
+from networks.continual_learning_beta import embedding
 
 
 class DefaultConfig(object):
     LR = 0.001
     L1_REG = 0
+    IS_INCREMENTAL = False
 
     ITERS = 1
     EPOCHS = 2
     BATCH_SIZE = 64
     IS_CONVOLUTIONAL = True
+
+    NEXT_TASK_LR = LR
+    NEXT_TASK_EPOCHS = EPOCHS
 
     EWC_SAMPLE_SIZE = 250
     EWC_IMPORTANCE = 1000
@@ -50,5 +55,11 @@ class GEM(DefaultConfig):
     CL_TEC = continual_learning.GEM
     EWC_IMPORTANCE = 0.5
     CL_PAR = {'margin': 0.5}
+    # super.CL_TEC_PARAMETERS['margin'] = 0.5
+
+
+class Embedding(DefaultConfig):
+    CL_TEC = embedding
+    # CL_PAR = {'margin': 0.5}
     # super.CL_TEC_PARAMETERS['margin'] = 0.5
 

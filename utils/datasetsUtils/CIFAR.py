@@ -72,13 +72,15 @@ class Cifar10(utils.datasetsUtils.dataset.GeneralDatasetLoader):
         else:
             target = torch.from_numpy(target)
 
-        if len(list(img.size())) < 4:
-            img = img.unsqueeze(0)
+        # img = torch.tensor(img)
+        # if len(list(img.size)) < 4:
+        #     img = img.unsqueeze(0)
 
         return img, target
 
     def __len__(self):
-        return len(self.task2idx[self._current_task][self._phase]['x'])
+        task = list(self.task2idx.keys())[self._current_task]
+        return len(self.task2idx[task][self._phase]['x'])
 
     def getIterator(self, batch_size, task=None):
 
@@ -87,9 +89,12 @@ class Cifar10(utils.datasetsUtils.dataset.GeneralDatasetLoader):
 
                 self.cifar = outer_dataset
                 if task is not None:
-                    self.t = task
+                    self.t = list(outer_dataset.task2idx.keys())[task]
+                    # self.t = task
                 else:
-                    self.t = outer_dataset.task
+                    self.t = list(outer_dataset.task2idx.keys())[outer_dataset.task]
+
+                    # self.t = outer_dataset.task
 
                 self.sampler = BatchSampler(RandomSampler(range(len(outer_dataset.task2idx
                                                                     [self.t]
@@ -160,9 +165,9 @@ class Cifar10(utils.datasetsUtils.dataset.GeneralDatasetLoader):
 
         self._n_tasks = len(self.task2idx)
 
-        for t, d in self.task2idx.items():
-            print('task #{} with train {} and test {} images (label: {})'.format(t, len(d['train']['x']), len(d['test']['x']),
-                                                                                 self.idx_to_class[t]))
+        # for t, d in self.task2idx.items():
+        #     print('task #{} with train {} and test {} images (label: {})'.format(t, len(d['train']['x']), len(d['test']['x']),
+        #                                                                          0))
 
     def train_test_split(self, task_map):
 
@@ -197,11 +202,11 @@ class Cifar10(utils.datasetsUtils.dataset.GeneralDatasetLoader):
 
 class Cifar100(Cifar10):
 
-    def __init__(self, folder: str, task: AbstractTaskDecorator, train_split: float = 0.9,
+    def __init__(self, folder: str, task_manager: AbstractTaskDecorator, train_split: float = 0.9,
                  transform=None, target_transform=None, download=False,
                  force_download=False, superclasses=False):
 
-        super().__init__(folder=folder, task_manager=task, train_split=train_split, transform=transform,
+        super().__init__(folder=folder, task_manager=task_manager, train_split=train_split, transform=transform,
                          target_transform=target_transform, download=download, force_download=force_download)
 
         self.url = 'https://www.cs.toronto.edu/~kriz/cifar-100-python.tar.gz'
@@ -255,16 +260,16 @@ class Cifar100(Cifar10):
         self.X, self.Y = X, Y
 
         if self.task_manager is not None:
-            task_map = self.task_manager.process_idx(self.Y)
+            task_map = self.task_manager.process_idx(ground_truth_labels=Y)
         else:
-            task_map = NoTask().process_idx(self.Y)
+            task_map = NoTask().process_idx(ground_truth_labels=Y)
 
         self.task2idx = self.train_test_split(task_map)
 
         self._n_tasks = len(self.task2idx)
 
-        for t, d in self.task2idx.items():
-            print('task #{} with train {} and test {} images (label: {})'.format(t, len(d['train']), len(d['test']),
-                                                                                 self.idx_to_class[t]))
+        # for t, d in self.task2idx.items():
+        #     print('task #{} with train {} and test {} images (label: {})'.format(t, len(d['train']), len(d['test']),
+        #                                                                          self.idx_to_class[t]))
 
 
