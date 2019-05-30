@@ -13,11 +13,11 @@ class DefaultConfig(object):
     BATCH_SIZE = 64
     IS_CONVOLUTIONAL = True
 
-    NEXT_TASK_LR = LR
-    NEXT_TASK_EPOCHS = EPOCHS
+    NEXT_TASK_LR = None
+    NEXT_TASK_EPOCHS = None
 
-    EWC_SAMPLE_SIZE = 250
-    EWC_IMPORTANCE = 1000
+    # EWC_SAMPLE_SIZE = 250
+    # EWC_IMPORTANCE = 1000
     USE_CL = True
 
     CL_TEC = continual_learning.EWC

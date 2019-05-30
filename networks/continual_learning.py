@@ -5,8 +5,15 @@ from utils.datasetsUtils.dataset import GeneralDatasetLoader
 import torch.nn.functional as F
 import random
 from torch import stack, cat, mm, Tensor, clamp, zeros_like, from_numpy, unsqueeze, matmul, mul, abs, nn
+import torch
 import numpy as np
 from scipy.stats import multivariate_normal
+
+
+def chunks(l, n):
+    """Yield successive n-sized chunks from l."""
+    for i in range(0, len(l), n):
+        yield l[i:i + n]
 
 
 class EWC(object):
@@ -231,16 +238,17 @@ class GEM(object):
         self.model = model
         self.dataset = dataset
         self.is_incremental = config.IS_INCREMENTAL
+        self.batch_size = config.BATCH_SIZE
 
         self.is_conv = config.IS_CONVOLUTIONAL
         self.device = config.DEVICE
-        self.sample_size = config.EWC_SAMPLE_SIZE
         self._current_task = 0
+
         self.margin = config.CL_PAR.get('margin', 0.5)
+        self.sample_size = config.CL_PAR.get('sample_size', 50)
 
         self.current_gradients = {}
         self.tasks_gradients = {}
-        self.sample_size = config.CL_PAR.get('sample_size', 100)
 
         self.tasks = []
         self._precision_matrices = None
@@ -253,7 +261,7 @@ class GEM(object):
         current_gradients = {}
         for n, p in self.model.named_parameters():
             if p.requires_grad:
-                current_gradients[n] = deepcopy(p.grad.data.view(-1))
+                current_gradients[n] = deepcopy(p.grad.data.view(-1).cpu())
 
         self._save_gradients(current_task=kwargs['current_task'])
 
@@ -262,14 +270,14 @@ class GEM(object):
         if not done:
             for n, p in self.model.named_parameters():
                 if p.requires_grad:
-                    p.grad.copy_(current_gradients[n].view(p.grad.data.size()))
+                    p.grad.copy_(current_gradients[n].view(p.grad.data.size()).cpu())
 
         return self, 0
 
     def _qp(self, past_tasks_gradient, current_gradient):
         t = past_tasks_gradient.shape[0]
         P = np.dot(past_tasks_gradient, past_tasks_gradient.transpose())
-        P = 0.5 * (P + P.transpose()) # + np.eye(t) * eps
+        P = 0.5 * (P + P.transpose()) + np.eye(t) * 1e-3
         q = np.dot(past_tasks_gradient, current_gradient) * -1
         q = np.squeeze(q, 1)
         h = np.zeros(t) + self.margin
@@ -288,7 +296,7 @@ class GEM(object):
                     tg.append(tgs[n])
 
             tg = stack(tg, 1).cpu()
-            a = mm(cg.unsqueeze(0).cpu(), tg)
+            a = mm(cg.unsqueeze(0), tg)
 
             if (a < 0).sum() != 0:
                 done = True
@@ -319,32 +327,29 @@ class GEM(object):
 
         for sub_task in range(current_task):
 
-            # self.model.task = sub_task
-            # if self.is_incremental:
-            #     self.model.task = self.dataset.task_mask(sub_task)
-            # else:
             self.model.task = sub_task
-
             self.model.zero_grad()
 
+            loss = 0
             for images, label in self.dataset.getIterator(self.sample_size, task=sub_task):
 
                 input = images.to(self.device)
                 label = label.to(self.device)
 
-                # if self.is_conv:
-                #     output = self.model(input.view(1, input.shape[0], input.shape[1], input.shape[2]))
-                # else:
-                output = self.model(input)
+                for i in chunks(range(self.sample_size), self.batch_size):
+                    inp = input[i]
+                    l = label[i]
+                    output = self.model(inp)
+                    loss += F.nll_loss(F.log_softmax(output, dim=1), l)
 
-                loss = F.nll_loss(F.log_softmax(output, dim=1), label)
-                loss.backward()
                 break
+
+            loss.backward()
 
             gradients = {}
             for n, p in self.model.named_parameters():
                 if p.requires_grad:
-                    gradients[n] = p.grad.data.view(-1)
+                    gradients[n] = p.grad.data.view(-1).cpu()
 
             self.tasks_gradients[sub_task] = deepcopy(gradients)
 

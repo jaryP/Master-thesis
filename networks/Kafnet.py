@@ -171,7 +171,7 @@ class CNN(AbstractNetwork):
 
         if mask.sum() != 0:
             x = x * from_numpy(mask).float().to(x.device)
-            
+
         return nn.functional.softmax(x, dim=1).max(dim=1)[1]
 
     def embedding(self, x):
@@ -209,13 +209,15 @@ class synCNN(AbstractNetwork):
         return layers
 
     def __init__(self, num_tasks, D=10, kernel='softplus', trainable_dict=False, alpha_mean=0, alpha_std=0,
-                 boundary=3, positive_dict=False, init_fcn=elu, topology=None):
+                 boundary=3, positive_dict=False, init_fcn=elu, topology=None, incremental=False):
+
         super().__init__(outputs=num_tasks)
 
         if topology is None:
             topology = [32,  64]
 
         self.topology = topology
+        self.incremental = incremental
 
         self.features = self.build_net(D=D, kernel=kernel, trainable_dict=trainable_dict, alpha_std=alpha_std,
                                        alpha_mean=alpha_mean,
@@ -229,7 +231,7 @@ class synCNN(AbstractNetwork):
         #                                          nn.Dropout(0.5)
         #                                          )
 
-        self.classification_layer = CustomLinear(self.output_size)
+        self.classification_layer = nn.Linear(2304, self.output_size)
 
     def forward(self, x):
         x = self.features(x)
@@ -237,12 +239,17 @@ class synCNN(AbstractNetwork):
         # x = self.features_processing(x)
         x = self.classification_layer(x)
 
-        if isinstance(self._task, (list, tuple, set)):
-            mask = np.zeros(self.output_size)
-            for i in self._task:
+        mask = np.zeros(self.output_size)
+        if self.incremental:
+            for i in self._used_tasks:
                 mask[i] = 1
-            x = x * from_numpy(mask).float().to(x.device)
+        else:
+            if isinstance(self._task, (list, tuple, set)):
+                for i in self._task:
+                    mask[i] = 1
 
+        if mask.sum() != 0:
+            x = x * from_numpy(mask).float().to(x.device)
         return x
 
     def eval_forward(self, x):
@@ -250,6 +257,18 @@ class synCNN(AbstractNetwork):
         x = x.view(x.size(0), -1)
         # x = self.features_processing(x)
         x = self.classification_layer(x)
+
+        mask = np.zeros(self.output_size)
+        if self.incremental:
+            for i in self._used_tasks:
+                mask[i] = 1
+        else:
+            if isinstance(self._task, (list, tuple, set)):
+                for i in self._task:
+                    mask[i] = 1
+
+        if mask.sum() != 0:
+            x = x * from_numpy(mask).float().to(x.device)
 
         return nn.functional.softmax(x, dim=1).max(dim=1)[1]
 

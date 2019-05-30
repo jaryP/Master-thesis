@@ -142,12 +142,10 @@ class KAF(nn.Module):
         if hasattr(self, '_dict'):
             return self._dict
 
-        dict_tensor = getattr(KAF, 'static_dict')
         if self.is_conv:
-            dict_tensor = dict_tensor.view(1, 1, 1, 1, -1)
+            return getattr(KAF, 'static_dict_conv')
         else:
-            dict_tensor = dict_tensor.view(1, -1)
-        return dict_tensor
+            return getattr(KAF, 'static_dict')
 
     def __init__(self, num_parameters, D=20, boundary=3.0, init_fcn=None, is_conv=False,
                  trainable_dict=False, kernel='gaussian', positive_dict=False, alpha_mean=0, alpha_std=0.8):
@@ -180,6 +178,12 @@ class KAF(nn.Module):
             if not hasattr(KAF, 'static_dict'):
                 setattr(KAF, 'static_dict', dict_tensor)
 
+            if is_conv:
+                if not hasattr(KAF, 'static_dict_conv'):
+                    setattr(KAF, 'static_dict_conv', dict_tensor.view(1, 1, 1, 1, -1))
+                if not hasattr(KAF, 'static_dict'):
+                    setattr(KAF, 'static_dict', dict_tensor.view(1, -1))
+
         if kernel == 'gaussian':
             interval = (self.dict_numpy[1] - self.dict_numpy[0])
             sigma = 2 * interval
@@ -208,13 +212,19 @@ class KAF(nn.Module):
             if K is None:
                 warnings.warn('Cannot perform kernel ridge regression with {} kernel '.format(kernel), RuntimeWarning)
                 self.alpha_init = None
+
+                if is_conv:
+                    self.alpha = Parameter(torch.FloatTensor(1, self.num_parameters, 1, 1, self.D))
+                else:
+                    self.alpha = Parameter(torch.FloatTensor(1, self.num_parameters, self.D))
+
+                normal_(self.alpha.data, mean=self.alpha_mean, std=self.alpha_std)
                 normal_(self.alpha.data, mean=self.alpha_mean, std=self.alpha_std)
 
             else:
                 alpha_init = np.linalg.solve(K + 1e-4 * np.eye(self.D), self.init_fcn(self.dict_numpy)).reshape(
                     -1).astype(np.float32)
 
-                print(alpha_init)
                 alpha_tensor = torch.from_numpy(alpha_init).view(-1)
                 alpha_tensor = alpha_tensor.unsqueeze(0)
 
@@ -232,9 +242,9 @@ class KAF(nn.Module):
 
             normal_(self.alpha.data, mean=self.alpha_mean, std=self.alpha_std)
 
-
     def forward(self, x):
-        x = torch.sum(self.kernel(self, x) * self.alpha, self.unsqueeze_dim)
+        x = self.kernel(self, x) * self.alpha
+        x = torch.sum(x, self.unsqueeze_dim)
         return x
 
     def __repr__(self):

@@ -155,12 +155,8 @@ class synCNN(AbstractNetwork):
                 nn.ReLU(inplace=True),
                 nn.MaxPool2d(kernel_size=2, stride=2, padding=0),
                 nn.Dropout(0.25),
-                # Flatten(),
-                # nn.Linear(100, 10)
             ]
             in_channels = x
-
-        # layers += [nn.AvgPool2d(kernel_size=1, stride=1)]
 
         layers = nn.Sequential(*layers)
 
@@ -176,14 +172,6 @@ class synCNN(AbstractNetwork):
         self.incremental = incremental
 
         self.features = self.build_net()
-
-        # self.features_processing = nn.Sequential(CustomLinear(512),
-        #                                          KAF(num_parameters=512, D=D, kernel=kernel, is_conv=False,
-        #                                              trainable_dict=trainable_dict,
-        #                                              boundary=boundary, positive_dict=positive_dict, init_fcn=init_fcn),
-        #                                          nn.BatchNorm1d(512),
-        #                                          nn.Dropout(0.5)
-        #                                          )
 
         self.classification_layer = nn.Linear(2304, self.output_size)
 

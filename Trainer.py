@@ -87,7 +87,7 @@ class Trainer:
 
         while has_next_task:
 
-            if self.config.OPTIMIZER == 'Adam' and self.is_incremental:
+            if self.config.OPTIMIZER == 'Adam' and (self.is_incremental or self.cont_learn_tec is not None):
                 self.optimizer.stat = collections.defaultdict(dict)
 
             current_task = self.dataset.task
@@ -177,6 +177,7 @@ class Trainer:
             self.model._used_tasks.update(set(self.dataset.task_mask(current_task)))
         else:
             self.model._used_tasks.add(current_task)
+
         # if isinstance(value, (list, tuple, set)):
         #     self._used_tasks.update(set(value))
         # else:
@@ -192,6 +193,9 @@ class Trainer:
             it.set_description("Training task {}, epoch {}".format(self.dataset.task, n+1))
 
         for x, y in it:
+
+            # print(torch.cuda.memory_allocated(), torch.cuda.memory_cached())
+
             if self.is_incremental:
                 self.model.task = self.dataset.task_mask(current_task)
             else:
@@ -278,41 +282,47 @@ class Trainer:
         self.metrics_calculator.add_evaluation(evaluated_task=evaluated_task, current_task=current_task,
                                                y_true=y_true, y_pred=y_pred)
 
-    def evaluate_on_dataset(self, dataset, current_task, evaluated_task=None):
+    def evaluate_on_dataset(self, dataset):
         dataset.test_phase()
         self.model.eval()
 
-        evaluated_task = evaluated_task if evaluated_task is not None else current_task
-
-        # if self.is_incremental:
-        #     self.model.task = self.dataset.task_mask(evaluated_task)
-        # else:
-        #     self.model.task = evaluated_task
-
-        if evaluated_task is None:
-            evaluated_task = current_task
-
-        i = 0
-
-        it = tqdm(dataset.getIterator(self.config.BATCH_SIZE, task=evaluated_task), disable=not self.verbose)
-        it.set_description("Current task: {}, evaluated task {}".format(current_task, evaluated_task))
+        has_next_task = True
 
         y_true = []
         y_pred = []
 
-        for x, y in it:
-            x, y = x.to(self.config.DEVICE), \
-                   y.to(self.config.DEVICE)
+        while has_next_task:
+            # evaluated_task = evaluated_task if evaluated_task is not None else current_task
+            current_task = dataset.task
 
-            with torch.no_grad():
-                y_pred_np = self.model.eval_forward(x).cpu().numpy()
-                y_true_np = y.cpu().numpy()
+            # if self.is_incremental:
+            #     self.model.task = self.dataset.task_mask(evaluated_task)
+            # else:
+            self.model.task = current_task
 
-            y_true.extend(list(y_true_np))
-            y_pred.extend(list(y_pred_np))
-            i += 1
+            # if evaluated_task is None:
+            #     evaluated_task = current_task
 
-            it.set_postfix({'batch#': i})
+            i = 0
+
+            it = tqdm(dataset.getIterator(self.config.BATCH_SIZE, task=current_task), disable=not self.verbose)
+            it.set_description("Current task: {}".format(current_task))
+
+            for x, y in it:
+                x, y = x.to(self.config.DEVICE), \
+                       y.to(self.config.DEVICE)
+
+                with torch.no_grad():
+                    y_pred_np = self.model.eval_forward(x).cpu().numpy()
+                    y_true_np = y.cpu().numpy()
+
+                y_true.extend(list(y_true_np))
+                y_pred.extend(list(y_pred_np))
+                i += 1
+
+                it.set_postfix({'batch#': i})
+
+            has_next_task = dataset.next_task(round_robin=False)
 
         return accuracy(y_true, y_pred), f1(y_true, y_pred)
 
@@ -365,15 +375,19 @@ if __name__ == '__main__':
     from networks.continual_learning_beta import JaryGEM, embedding
     from configs.configClasses import DefaultConfig, OnlineLearningConfig
     from torchvision.transforms import transforms
+    from copy import deepcopy
+    from networks.net_utils import elu
 
     transform = transforms.Compose(
         [transforms.ToTensor(),
          transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))]
     )
 
-    dataset = CIFAR.Cifar100('./notebooks/data/cifar100', download=True, task_manager=IncrementalTaskClassification(5),
+    dataset = CIFAR.Cifar10('./notebooks/data/cifar10', download=True, task_manager=NoTask(),
                             force_download=False, train_split=0.8, transform=transform, target_transform=None)
     dataset.load_dataset()
+
+    d = deepcopy(dataset)
 
     # dataset = MINST.PermutedMINST('./data/minst', download=True, n_permutation=4,
     #                               force_download=False, train_split=0.8)
@@ -396,23 +410,25 @@ if __name__ == '__main__':
     config = DefaultConfig()
 
     # config.DEVICE = 'cpu'
-    config.EPOCHS = 10
-    config.IS_INCREMENTAL = True
+    config.EPOCHS = 5
+    config.IS_INCREMENTAL = False
     config.LR = 1e-3
     config.BATCH_SIZE = 32
     # config.EWC_IMPORTANCE = 0.5
     # config.EWC_SAMPLE_SIZE = 100
     config.OPTIMIZER = 'Adam'
-    config.CL_TEC = GEM
+    config.CL_TEC = embedding
     config.USE_CL = True
 
     config.NEXT_TASK_LR = None
     config.NEXT_TASK_EPOCHS = None
 
-    config.CL_PAR = {'penalty_importance': 4e6, 'memorized_task_size': 300, 'weights_type': 'usage',
-                     'sample_size': 50, 'maxf': 0.001, 'c': 2, 'margin': 0.5}
+    # config.CL_PAR = {'penalty_importance': 1, 'memorized_task_size': 300, 'weights_type': 'usage',
+    #                  'sample_size': 50, 'maxf': 0.001, 'c': 2, 'margin': 0.5}
+    config.CL_PAR = {'penalty_importance': 1, 'weights_type': 'distance', 'sample_size': 10, 'distance': 'cosine'}
 
-    net = NoKafnet.synCNN(100)
+    net = Kafnet.synCNN(10, kernel='softplus', D=15, boundary=3,
+                        alpha_mean=0, alpha_std=0.8, trainable_dict=False, init_fcn=elu)
 
     for n, p in net.named_parameters():
         print(n, p.size())
@@ -433,12 +449,16 @@ if __name__ == '__main__':
     # print(trainer.evaluate_on_dataset(dataset, 0, 0))
 
     a = trainer.all_tasks()
+    b = trainer.evaluate_on_dataset(d)
+    print(b)
 
     for k, v in a['tasks'].items():
         print(k, v['f1'])
         print('\t', v['accuracy'])
 
     print(a['metrics'])
+
+
 
     # dataset.load_dataset()
     # net = NoKafnet.VGG()
