@@ -14,6 +14,10 @@ def elu(s):
     return np.maximum(0, s) + np.minimum(0, np.exp(s) - 1.0)
 
 
+def leakyRelu(s):
+    return np.maximum(0, s) + 0.01*np.minimum(0, s)
+
+
 def sigmoid(x):
     return 1 / (1 + np.exp(-x))
 
@@ -24,17 +28,19 @@ def tanh(x):
 
 def gaussian_kernel(model):
     def kernel(model, input):
-        return torch.exp(-torch.mul((torch.add(input.unsqueeze(model.unsqueeze_dim), - model.dict)) ** 2, model.gamma))
+        return torch.exp(
+            -torch.mul((torch.add(input.unsqueeze(model.unsqueeze_dim), - model.dict.to(input.device))) ** 2,
+                       model.gamma.to(input.device)))
 
     def kernel_init(x):
-        return np.exp(- model.gamma * (x) ** 2)
+        return np.exp(- (model.gamma_init * x) ** 2)
 
     return kernel, kernel_init
 
 
 def relu_kernel(model):
     def kernel(model, input):
-        return F.relu(input.unsqueeze(model.unsqueeze_dim) - model.dict)
+        return F.relu(input.unsqueeze(model.unsqueeze_dim) - model.dict.to(input.device))
 
     def kernel_init(_):
         return None
@@ -44,7 +50,7 @@ def relu_kernel(model):
 
 def softplus_kernel(model):
     def kernel(model, input):
-        return F.softplus(input.unsqueeze(model.unsqueeze_dim) - model.dict)
+        return F.softplus(input.unsqueeze(model.unsqueeze_dim) - model.dict.to(input.device))
 
     def kernel_init(x):
         return np.log(np.exp(x) + 1.0)
@@ -54,7 +60,7 @@ def softplus_kernel(model):
 
 def polynomial_kernel(model):
     def kernel(model, input):
-        return torch.pow(1 + torch.mul(input.unsqueeze(model.unsqueeze_dim), model.dict), 2)
+        return torch.pow(1 + torch.mul(input.unsqueeze(model.unsqueeze_dim), model.dict.to(input.device)), 2)
 
     def kernel_init(x):
         return 1 + np.power(x, 2)
@@ -64,12 +70,29 @@ def polynomial_kernel(model):
 
 def sigmoid_kernel(model):
     def kernel(model, input):
-        return torch.tanh(1 + torch.mul(input.unsqueeze(model.unsqueeze_dim), model.dict))
+        return torch.tanh(1 + torch.mul(input.unsqueeze(model.unsqueeze_dim), model.dict.to(input.device)))
 
     def kernel_init(x):
-        return np.tanh(- model.gamma * (x) ** 2)
+        return np.tanh(- model.gamma_init * (x) ** 2)
 
     return kernel, kernel_init
+
+
+class Flatten(nn.Module):
+    def forward(self, input):
+        return input.view(input.size(0), -1)
+
+
+class CustomLinear(nn.Module):
+    def __init__(self, out_dim):
+        super().__init__()
+        self.out_dim = out_dim
+        self.linear = None
+
+    def forward(self, input):
+        if self.linear is None:
+            self.linear = nn.Linear(input.size()[-1], self.out_dim).to(input.device)
+        return self.linear(input)
 
 
 class AbstractNetwork(ABC, nn.Module):
@@ -77,6 +100,7 @@ class AbstractNetwork(ABC, nn.Module):
         super().__init__()
         self.output_size = outputs
         self._task = 0
+        self._used_tasks = set()
 
     @abstractmethod
     def build_net(self):
@@ -96,8 +120,10 @@ class AbstractNetwork(ABC, nn.Module):
 
     @task.setter
     def task(self, value):
-        if value > self.output_size:
-            value = self.output_size
+        # if value > self.output_size:
+        #     value = self.output_size
+        # self._used_tasks.update(value)
+
         self._task = value
 
     @task.getter
@@ -107,42 +133,63 @@ class AbstractNetwork(ABC, nn.Module):
 
 class KAF(nn.Module):
 
-    def __init__(self, num_parameters, D=20, boundary=3.0, init_fcn=elu, is_conv=False,
-                 trainable_dict=False, kernel='gaussian'):
+    @property
+    def dict(self):
+        return self.dict
+
+    @dict.getter
+    def dict(self):
+        if hasattr(self, '_dict'):
+            return self._dict
+
+        if self.is_conv:
+            return getattr(KAF, 'static_dict_conv')
+        else:
+            return getattr(KAF, 'static_dict')
+
+    def __init__(self, num_parameters, D=20, boundary=3.0, init_fcn=None, is_conv=False,
+                 trainable_dict=False, kernel='gaussian', positive_dict=False, alpha_mean=0, alpha_std=0.8):
 
         super(KAF, self).__init__()
         self.num_parameters, self.D = num_parameters, D
-        self.dict_numpy = np.linspace(-boundary, boundary, self.D).astype(np.float32).reshape(-1, 1)
-
-        dict_tensor = torch.from_numpy(self.dict_numpy).view(-1)
-
-        if trainable_dict:
-            dict_tensor = dict_tensor.unsqueeze(0)
-            if is_conv:
-                dict_tensor = dict_tensor.repeat(1, self.num_parameters, 1, 1, 1)
-            else:
-                dict_tensor = dict_tensor.repeat(1, self.num_parameters, 1)
-            self.dict = Parameter(dict_tensor)
-        else:
-            self.register_buffer('dict', dict_tensor)
+        self.is_conv = is_conv
+        self.alpha_std = alpha_std
+        self.alpha_mean = alpha_mean
 
         if is_conv:
             self.unsqueeze_dim = 4
         else:
             self.unsqueeze_dim = 2
 
+        if positive_dict:
+            self.dict_numpy = np.linspace(0, boundary, self.D).astype(np.float32).reshape(-1, 1)
+        else:
+            self.dict_numpy = np.linspace(-boundary, boundary, self.D).astype(np.float32).reshape(-1, 1)
+
+        dict_tensor = torch.from_numpy(self.dict_numpy)  # .view(-1)
+        if trainable_dict:
+            dict_tensor = dict_tensor.unsqueeze(0).view(-1)
+            if is_conv:
+                dict_tensor = dict_tensor.repeat(1, self.num_parameters, 1, 1, 1)
+            else:
+                dict_tensor = dict_tensor.repeat(1, self.num_parameters, 1)
+            self._dict = Parameter(dict_tensor)
+        else:
+            if not hasattr(KAF, 'static_dict'):
+                setattr(KAF, 'static_dict', dict_tensor)
+
+            if is_conv:
+                if not hasattr(KAF, 'static_dict_conv'):
+                    setattr(KAF, 'static_dict_conv', dict_tensor.view(1, 1, 1, 1, -1))
+                if not hasattr(KAF, 'static_dict'):
+                    setattr(KAF, 'static_dict', dict_tensor.view(1, -1))
+
         if kernel == 'gaussian':
             interval = (self.dict_numpy[1] - self.dict_numpy[0])
             sigma = 2 * interval
-            self.gamma_init = float(0.5 / np.square(sigma))
-
-            if is_conv:
-                self.register_buffer('gamma',
-                                     torch.from_numpy(
-                                         np.ones((1, 1, 1, 1, self.D), dtype=np.float32) * self.gamma_init))
-            else:
-                self.register_buffer('gamma',
-                                     torch.from_numpy(np.ones((1, 1, self.D), dtype=np.float32) * self.gamma_init))
+            self.gamma_init = 0.5 / np.square(sigma)
+            if not hasattr(KAF, 'gamma'):
+                setattr(KAF, 'gamma', torch.tensor(self.gamma_init))
 
             self.kernel, self.kernel_init = gaussian_kernel(self)
         elif kernel == 'relu':
@@ -151,6 +198,9 @@ class KAF(nn.Module):
             self.kernel, self.kernel_init = softplus_kernel(self)
         elif kernel == 'polynomial':
             self.kernel, self.kernel_init = polynomial_kernel(self)
+        elif kernel == 'sigmoid':
+            self.kernel, self.kernel_init = sigmoid_kernel(self)
+
         else:
             raise ValueError("Unexpected 'kernel'!", kernel)
 
@@ -162,7 +212,15 @@ class KAF(nn.Module):
             if K is None:
                 warnings.warn('Cannot perform kernel ridge regression with {} kernel '.format(kernel), RuntimeWarning)
                 self.alpha_init = None
-                normal_(self.alpha.data, std=0.8)
+
+                if is_conv:
+                    self.alpha = Parameter(torch.FloatTensor(1, self.num_parameters, 1, 1, self.D))
+                else:
+                    self.alpha = Parameter(torch.FloatTensor(1, self.num_parameters, self.D))
+
+                normal_(self.alpha.data, mean=self.alpha_mean, std=self.alpha_std)
+                normal_(self.alpha.data, mean=self.alpha_mean, std=self.alpha_std)
+
             else:
                 alpha_init = np.linalg.solve(K + 1e-4 * np.eye(self.D), self.init_fcn(self.dict_numpy)).reshape(
                     -1).astype(np.float32)
@@ -181,41 +239,61 @@ class KAF(nn.Module):
                 self.alpha = Parameter(torch.FloatTensor(1, self.num_parameters, 1, 1, self.D))
             else:
                 self.alpha = Parameter(torch.FloatTensor(1, self.num_parameters, self.D))
-            normal_(self.alpha.data, std=0.8)
 
-    def forward(self, input):
-        K = self.kernel(self, input)
-        y = torch.sum(K * self.alpha, self.unsqueeze_dim)
-        return y
+            normal_(self.alpha.data, mean=self.alpha_mean, std=self.alpha_std)
+
+    def forward(self, x):
+        x = self.kernel(self, x) * self.alpha
+        x = torch.sum(x, self.unsqueeze_dim)
+        return x
 
     def __repr__(self):
         return self.__class__.__name__ + ' (' + str(self.num_parameters) + ')'
 
 
 class MultiKAF(nn.Module):
+
+    @property
+    def dict(self):
+        return self.dict
+
+    @dict.getter
+    def dict(self):
+        if hasattr(self, '_dict'):
+            return self._dict
+
+        dict_tensor = getattr(MultiKAF, 'static_dict')
+        if self.is_conv:
+            dict_tensor = dict_tensor.view(1, 1, 1, 1, -1)
+        else:
+            dict_tensor = dict_tensor.view(1, -1)
+        return dict_tensor
+
     def __init__(self, num_parameters, D=20, boundary=3.0, init_fcn=None, is_conv=False, trainable_dict=False,
                  kernel_combination='weighted', kernels=None):
         super().__init__()
 
         if kernels is None:
-            kernels = ['gaussian', 'polynomial', 'relu']#, 'softplus']
+            kernels = ['gaussian', 'polynomial', 'relu']  # , 'softplus']
         # else:
         self.kernels = []
 
         self.is_conv = is_conv
 
         self.dict_numpy = np.linspace(-boundary, boundary, D).astype(np.float32).reshape(-1, 1)
-        dict_tensor = torch.from_numpy(self.dict_numpy).view(-1)
 
+        dict_tensor = torch.from_numpy(self.dict_numpy)  # .view(-1)
         if trainable_dict:
-            dict_tensor = dict_tensor.unsqueeze(0)
+            dict_tensor = dict_tensor.unsqueeze(0).view(-1)
             if is_conv:
                 dict_tensor = dict_tensor.repeat(1, self.num_parameters, 1, 1, 1)
             else:
                 dict_tensor = dict_tensor.repeat(1, self.num_parameters, 1)
-            self.dict = Parameter(dict_tensor)
+            self._dict = Parameter(dict_tensor)
+            print(self._dict.size())
         else:
-            self.register_buffer('dict', dict_tensor)
+            if not hasattr(MultiKAF, 'static_dict'):
+                setattr(MultiKAF, 'static_dict', torch.tensor(dict_tensor))
 
         inits = []
 
@@ -224,17 +302,13 @@ class MultiKAF(nn.Module):
             if k == 'gaussian':
                 interval = (self.dict_numpy[1] - self.dict_numpy[0])
                 sigma = 2 * interval
-                self.gamma_init = float(0.5 / np.square(sigma))
+                gamma_init = float(0.5 / np.square(sigma))
 
                 kernel, kernel_init = gaussian_kernel(self)
 
-                if is_conv:
-                    self.register_buffer('gamma',
-                                         torch.from_numpy(np.ones((1, 1, 1, 1, D), dtype=np.float32)))# * self.gamma_init))
-                    # self.alpha = Parameter(torch.FloatTensor(1, self.num_parameters, 1, 1, self.D))
-                else:
-                    self.register_buffer('gamma',
-                                         torch.from_numpy(np.ones((1, 1, D), dtype=np.float32)))# * self.gamma_init))
+                if not hasattr(MultiKAF, 'gamma'):
+                    setattr(MultiKAF, 'gamma', torch.tensor(gamma_init))
+
             elif k == 'relu':
                 kernel, kernel_init = relu_kernel(self)
 
@@ -253,7 +327,7 @@ class MultiKAF(nn.Module):
             if kernel_init is not None:
                 inits.append(kernel_init)
 
-            self.kernels.append(k+'_'+str(i))
+            self.kernels.append(k + '_' + str(i))
 
             setattr(self, self.kernels[i], kernel)
 
@@ -286,8 +360,10 @@ class MultiKAF(nn.Module):
                 alpha_init = np.linalg.solve(K + 1e-4 * np.eye(D), init_fcn(self.dict_numpy)).reshape(
                     -1).astype(np.float32)
                 alpha.data = torch.from_numpy(alpha_init)
+
+                print(alpha)
         else:
-            normal_(alpha.data, mean=0, std=0.8)
+            normal_(alpha.data, mean=1, std=0.5)
 
         self.alpha = alpha
         self.mu = Parameter(mu, requires_grad=True)
@@ -318,20 +394,20 @@ class MultiKAF(nn.Module):
 
     def kernel_sum(self, x, f):
         f = self.mu.unsqueeze(-2) * f
-        y = torch.sum(f, self.unsqueeze_dim+1)
+        y = torch.sum(f, self.unsqueeze_dim + 1)
         return y
 
     def kernel_softmax(self, x, f):
         sm = F.softmax(self.mu, dim=-1)
 
         f = torch.mul(sm.unsqueeze(-2), f)
-        y = torch.sum(f, self.unsqueeze_dim+1)
+        y = torch.sum(f, self.unsqueeze_dim + 1)
         return y
 
     def kernel_sigmoid(self, x, f):
         sm = tsig(self.mu)
         f = torch.mul(sm.unsqueeze(-2), f)
-        y = torch.sum(f, self.unsqueeze_dim+1)
+        y = torch.sum(f, self.unsqueeze_dim + 1)
         return y
 
     def kernel_layer_attention(self, x, f):
@@ -339,7 +415,7 @@ class MultiKAF(nn.Module):
         sm = torch.einsum('bx,xnm->xnm', s, self.mu)
         sm = F.softmax(sm, dim=-1)
         f = torch.mul(sm.unsqueeze(-2), f)
-        y = torch.sum(f, self.unsqueeze_dim+1)
+        y = torch.sum(f, self.unsqueeze_dim + 1)
         return y
 
     def kernel_neuron_attention(self, x, f):
@@ -349,7 +425,7 @@ class MultiKAF(nn.Module):
         sm = torch.einsum('bnd,xnm->xnm', s, self.mu)
         sm = F.softmax(sm, dim=-1)
         f = torch.mul(sm.unsqueeze(-2), f)
-        y = torch.sum(f, self.unsqueeze_dim+1)
+        y = torch.sum(f, self.unsqueeze_dim + 1)
         return y
 
     def forward(self, x):

@@ -73,13 +73,18 @@ class GeneralDatasetLoader(ABC, Dataset):
 
     @task.setter
     def task(self, value):
-        if value >= self._n_tasks:
-            value = self._n_tasks - 1
+        # if value >= self._n_tasks:
+        #     value = self._n_tasks - 1
         self._current_task = value
 
     @task.getter
     def task(self):
         return self._current_task
+
+    def task_mask(self, task=None):
+        if task is None:
+            task = self._current_task
+        return list(self.task2idx.keys())[task]
 
     @abstractmethod
     def getIterator(self, batch_size, task=None):

@@ -1,3 +1,4 @@
+import warnings
 import quadprog
 import torch
 import torch.nn as nn
@@ -726,249 +727,246 @@ class embedding(object):
         self.model = model
         self.dataset = dataset
 
-        self.encoder = torch.nn.Sequential(
-            torch.nn.Linear(28*28, 300),
-            torch.nn.ReLU(),
-            torch.nn.Linear(300, 200),
-            torch.nn.ReLU(),
-            torch.nn.Linear(200, 100),
-            # torch.nn.ReLU(),
-            # torch.nn.linear(100 * 28, 200),
-        ).to(config.DEVICE)
-
-        def hook(module, input, output):
-            setattr(module, "_value_hook", output)
-
-        for n, m in self.model.named_modules():
-            if n != 'proj':
-                m.register_forward_hook(hook)
-
         self.is_conv = config.IS_CONVOLUTIONAL
         self.device = config.DEVICE
-        self.sample_size = config.EWC_SAMPLE_SIZE
-        self.gamma = config.GAMMA
         self.batch_size = config.BATCH_SIZE
+        self.first_batch = True
+
+        self.sample_size = config.CL_PAR.get('sample_size', 50)
+        self.memorized_task_size = config.CL_PAR.get('memorized_task_size', 300)
+        self.importance = config.CL_PAR.get('penalty_importance', 1)
+        self.c = config.CL_PAR.get('c', 1)
+        self.distance = config.CL_PAR.get('distance', 'euclidean')
+        self.supervised = config.CL_PAR.get('supervised', True)
+
+        self.online = config.CL_PAR.get('online', False)
+        self.memory_size = config.CL_PAR.get('memory_size', -1)
+
+        if 0 < self.memory_size < self.memorized_task_size:
+            self.memorized_task_size = self.memory_size
+
+        # Can be distance, usage, image_similarity or none
+        self.weights_type = config.CL_PAR.get('weights_type', None)
+
+        if self.weights_type == 'image_similarity':
+            img_size = dataset[0][0].size()
+            if self.is_conv:
+                pass
+            else:
+                self.encoder = torch.nn.Sequential(
+                    torch.nn.Linear(28*28, 300),
+                    torch.nn.ReLU(),
+                    torch.nn.Linear(300, 200),
+                    torch.nn.ReLU(),
+                    torch.nn.Linear(200, 100),
+                ).to(config.DEVICE)
+
+        # Can be None, a tuple (a, b) or an integer. IF a tuple (a, b) is given then  these are the input and
+        # output size of the layer, otherwise if a single integer is given then
+        # it will be the dimension for both input and output
+        external_embedding = config.CL_PAR.get('external_embedding', None)
+
+        if external_embedding is not None:
+            a = b = None
+            if isinstance(external_embedding, int):
+                a = external_embedding
+                b = a
+            elif isinstance(external_embedding, (tuple, list)):
+                a, b = external_embedding
+
+            if a is not None:
+                self.external_embedding_layer = torch.nn.Linear(a, b, bias=False).to(self.device)
+
+                torch.nn.init.orthogonal_(self.external_embedding_layer.weight.data)
+
+                for param in self.external_embedding_layer.parameters():
+                    param.requires_grad = False
+
+                self.model.external_embedding_layer = self.external_embedding_layer
+
+            else:
+                warnings.warn("Possible values for external_embedding are integer or (integer, integer")
+
+        else:
+            self.external_embedding_layer = None
+
+        # def hook(module, input, output):
+        #     setattr(module, "_value_hook", output)
+        #
+        # for n, m in self.model.named_modules():
+        #     if n != 'proj':
+        #         m.register_forward_hook(hook)
+
         self._current_task = 0
         self.sample_size_task = 0
-
-        # self.margin = config.EWC_IMPORTANCE
+        self.batch_count = 0
 
         self.tasks = set()
 
-        self.embeddings = None
-        self.embeddings_images = None
-        self.w = []
-        self.embeddings_images = []
+        self.embeddings = {}
+        self.embeddings_images = {}
+        self.w = {}
+        # self.embeddings_images = []
 
     def __call__(self, *args, **kwargs):
+
+        if self.importance == 0:
+            return self, 0
+
         current_task = kwargs['current_task']
-        current_batch = kwargs['batch']
+
         penalty = 0
-        # self.train_step(current_batch)
-        # self.embedding_save(current_task)
+
         if current_task > 0:
+            current_batch = kwargs['batch']
+
+            self.batch_count += 1
             self.embedding_save(current_task)
-            self.penalty_1()
-        #     penalty = self.penalty(current_task, current_batch)
+
+            if not self.first_batch:# and self.batch_count % self.c == 0:
+                penalty = self.embedding_drive(current_batch)
+            else:
+                self.first_batch = False
+
         return self, penalty
 
     def embedding_save(self, current_task):
+
         if current_task-1 not in self.tasks:
+            self.first_batch = True
             self.tasks.add(current_task-1)
+
+            self.batch_count = 0
 
             self.model.eval()
             self.dataset.train_phase()
 
-            it = self.dataset.getIterator(self.sample_size, task=current_task-1)
-            # labels = [current_task-1] * self.sample_size
-            # self.embeddings_labels.extend(labels)
-            self.w.extend([1] * self.sample_size)
+            it = self.dataset.getIterator(self.memorized_task_size, task=current_task-1)
+
+            # self.w.extend([1] * self.memorized_task_size)
 
             images, _ = next(it)
-            # for (images, _) in it:
 
             input = images.to(self.device)
+
             with torch.no_grad():
+
                 output = self.model.embedding(input)
+                if self.external_embedding_layer is not None:
+                    output = self.external_embedding_layer(output)
 
                 embeddings = output.cpu()
-                if self.embeddings is None:
-                    self.embeddings = embeddings
-                    self.embeddings_images = images
+                embeddings = F.normalize(embeddings, p=2, dim=1)
+
+                if self.supervised:
+                    self.embeddings[current_task-1] = embeddings.cpu()
+                    self.embeddings_images[current_task-1] = images.cpu()
+
+                    w = [1] * self.memorized_task_size
+
+                    for t in self.w.keys():
+                        self.w[t] = deepcopy(w)
+
+                    self.w[current_task-1] = deepcopy(w)
                 else:
-                    self.embeddings = torch.cat((self.embeddings, embeddings), 0)
-                    self.embeddings_images = torch.cat((self.embeddings_images, images), 0)
+                    self.embeddings[0] = torch.cat((self.embeddings[0], embeddings.cpu()), 0)
+                    self.embeddings_images[0] = torch.cat((self.embeddings_images[0], images.cpu()), 0)
 
-            print(self.embeddings.size(), self.embeddings_images.size())
+                    self.w[0] = [1] * embeddings[0].size()[0]
 
-    def train_step(self, current_batch):
-        x = current_batch[0]
-        y = self.decoder(self.encoder(x))
-        self.optimizer.zero_grad()
-        loss = self.loss(y, x)
-        loss.backward()
-        self.optimizer.step()
+                # if self.embeddings is None or self.online:
+                #     self.embeddings = embeddings
+                #     self.embeddings_images = images
+                #     self.w = [1] * self.memorized_task_size
+                # else:
+                #     self.embeddings = torch.cat((self.embeddings, embeddings), 0)
+                #     self.embeddings_images = torch.cat((self.embeddings_images, images), 0)
+                #     self.w = [1] * self.embeddings.size()[0]
+                #
+                # if 0 < self.memory_size < len(self.w):
+                #     self.embeddings = self.embeddings[-self.memory_size:]
+                #     self.embeddings_images = self.embeddings_images[-self.memory_size:]
+                #     self.w = self.w[-self.memory_size:]
 
-    def penalty_1(self):
-        self.model.eval()
-        idx = range(self.embeddings_images.size()[0])
-        idx = random.choices(idx, k=self.batch_size, weights=self.w)
+            self.model.train()
+            self.dataset.train_phase()
 
-        img = self.embeddings_images[idx].to(self.device)
-        embeddings = self.embeddings[idx].to(self.device)
-
-        new_embeddings = self.model.embedding(img)
-
-        # d = torch.bmm(embeddings.unsqueeze(1), new_embeddings.unsqueeze(-1))
-
-        # x = embeddings / embeddings.norm(dim=1)[:, None]
-        # y = new_embeddings / new_embeddings.norm(dim=1)[:, None]
-        # dist = torch.mm(x, y.transpose(0, 1))
-        cosine = torch.nn.functional.cosine_similarity(embeddings, new_embeddings)
-        dist = 1-cosine
-        # print(cosine)
-        # print(dist)
-
-        dist.mean().backward()
-
-        dist = dist.detach().cpu().numpy()
-        # print(dist)
-        # print(self.w)
-        for j, i in enumerate(idx):
-            self.w[i] = dist[j]
-        # print(self.w)
-        # input()
-        # print(dist.size())
-        # print(dist.min())
-
-    def penalty(self, current_task, current_batch):
-
+    def embedding_drive(self, current_batch):
         self.model.eval()
 
-        self.dataset.train_phase()
-        # it = self.dataset.getIterator(self.batch_size, task=current_task)
-        #
-        # images, _ = next(it)
-        # # for (images, _) in it:
-        #
-        # i = images.to(self.device)
-        #
-        # if self.is_conv:
-        #     i = self.encoder(i)
-        # else:
-        #     i = self.encoder(i)
+        to_back = 0
 
-        # embeddings = i.cpu().detach().numpy()
-        #
-        # if self.embeddings is None:
-        #     self.embeddings = embeddings
-        # else:
-        #     self.embeddings = np.concatenate((self.embeddings, embeddings), 0)
+        for t in self.embeddings:
+            w = self.w[t]
 
-        old_tasks = []
-        tot_loss = 0
-        self.dataset.train_phase()
+            # idx = range(self.embeddings_images.size()[0])
+            idx = range(self.memorized_task_size)
 
-        for sub_task in range(current_task):
-            it = self.dataset.getIterator(self.batch_size, task=sub_task)
+            # w = self.w
+            if self.weights_type == 'usage':
+                # ws = np.sum(self.w)
+                w = [1/wc for wc in w]
 
-            images, _ = next(it)
-            images = images.to(self.device)
+            idx = random.choices(idx, k=self.sample_size, weights=w)
 
-            # old_tasks.extend([images[i] for i in range(len(images))])
+            img = self.embeddings_images[t][idx].to(self.device)
+            embeddings = self.embeddings[t][idx]
 
-            # images = torch.stack(random.sample(old_tasks, k=self.sample_size), 0).to(self.device)
+            new_embeddings = self.model.embedding(img)
+            if self.external_embedding_layer is not None:
+                new_embeddings = self.external_embedding_layer(new_embeddings)
 
-            # with torch.no_grad():
-            #     embeddings = self.encoder(images).cpu().numpy()
-            #     W = np.exp(-(euclidean_distances(embeddings, embeddings)))
-            # print(W)
-            forward = self.model.embedding(images)
-            forward_b = self.model.embedding(current_batch[0])
+            new_embeddings = F.normalize(new_embeddings, p=2, dim=1).cpu()
+            # d = torch.bmm(embeddings.unsqueeze(1), new_embeddings.unsqueeze(-1))
 
-                # tot_p = []
-                # for n, p in self.model.named_modules():
-                #     if hasattr(p, '_value_hook'):
-                #         # print(n, getattr(p, '_value_hook'))
-                #         forward = getattr(p, '_value_hook').cpu().numpy()
-                #
-                #         X = np.matmul(forward, forward.T)
-                #         m = np.diag(X)
-                #         m = np.matmul(np.expand_dims(m, -1), np.ones((1, len(forward))))
-                #         d = m + m.T - 2 * X
-                #         d *= W
-                #
-                #         p = np.max(d, 1)
-                #         p = np.mean(p)
-                #         tot_p.append(p)
-            # dis = torch.nn.PairwiseDistance()
-            # d = dis(forward, forward)
+            # x = embeddings / embeddings.norm(dim=1)[:, None]
+            # y = new_embeddings / new_embeddings.norm(dim=1)[:, None]
+            # dist = torch.mm(x, y.transpose(0, 1))
+            # cosine = torch.nn.functional.cosine_similarity(embeddings, new_embeddings)
+            # dist = 1-cosine
 
-            # EUCLIDEAN DISTANCEs
-            # x_norm = (forward_b**2).sum(1).view(-1, 1)
-            # y_norm = (forward**2).sum(1).view(1, -1)
-            # dist = x_norm + y_norm - 2.0 * torch.mm(forward_b, torch.transpose(forward, 0, 1))
+            if self.distance == 'euclidean':
+                dist = (embeddings - new_embeddings).norm(p=None, dim=1)
+            elif self.distance == 'cosine':
+                cosine = torch.nn.functional.cosine_similarity(embeddings, new_embeddings)
+                dist = 1-cosine
 
-            # COSINE SIMILARITY
-            x = forward_b / forward_b.norm(dim=1)[:, None]
-            y = forward / forward.norm(dim=1)[:, None]
-            dist = torch.mm(x, y.transpose(0, 1))
-            # print(torch.sum((dist < 0).int()))
-            # dist = torch.mm(forward_b, torch.transpose(forward, 0, 1))
-            # dist = torch.mm(forward_b.t(), forward)
-            # dist /= x_norm / y_norm.t()
-            # dist /= torch.mm(x_norm, y_norm)
+            # dist = (embeddings - new_embeddings).norm(p=None, dim=1)
 
-            # print(dist.size())
-            # print(dist.size(), (x_norm / y_norm.t()).size())
-            # print(dist)
+            # print(dist.mean(), end=' ')
 
-            # print(dist)
-            # print(dist.size())
-            # X = np.matmul(forward, forward.T)
-            # m = np.diag(X)
-            # m = np.matmul(np.expand_dims(m, -1), np.ones((1, len(forward))))
-            # d = m + m.T - 2 * X
+            distb = dist.mean() * self.importance
+            # print(dist, distb)
+            # print(distb, torch.log(distb))
+            to_back += distb.to(self.device)
+            # distb = -torch.log(dist.mean()) * self.importance
+            # distb.backward()
 
-            # dist = torch.mul(dist, from_numpy(W).float().to(self.device))
+            if self.weights_type is not None:
+                if self.weights_type == 'distance':
+                    dist = dist.detach().cpu().numpy()
+                    for j, i in enumerate(idx):
+                        self.w[t][i] = float(dist[j])
 
-            # print(dist)
-            # print(tot_p)
-            # a = torch.tensor(torch.tensor(np.mean(d, keepdims=True), requires_grad=True)).float()
-            # t = torch.Tensor(a)
-            # t.backward()
-            mx = torch.mean(dist, 1)
-            # print(mx)
-            mx = 1 - mx
-            # print(mx)
-            # print(mx)
-            # mx = torch.log1p(mx)
-            # print(mx)
-            mn = -torch.log(torch.mean(mx))
-            # mn.backward()
+                elif self.weights_type == 'usage':
+                    for j, i in enumerate(idx):
+                        self.w[t][i] += 1
 
-            # mn.backward()
-            # print(sub_task, mn)
-            # w = 1 ** -sub_task
-            # print(sub_task, w)
-            tot_loss += mn #* (1 / (sub_task+1))
+                elif self.weights_type == 'image_similarity':
+                    current_images = self.encoder(current_batch[0])
+                    old_images = self.encoder(img)
 
-        tot_loss.backward()
-        # mn = torch.log(tot_loss)
-        # # print(mn)
-        # # mn.backward()
-        #     for n, p in self.model.named_parameters():
-        #         if p.requires_grad:
-        #             # mx = torch.max(dist, 1)[0]
-        #             g = grad(mn, p, allow_unused=True, retain_graph=True)[0]
-        #             # print(n, g)
-        #             if g is None:
-        #                 continue
-        #             p.grad.add_(g)
-                    # print(n, loss)
-        # print(tot_loss)
-        # print(t.grad_fn)
-        # getBack(t.grad_fn)
+                    with torch.no_grad():
+                        current_images = current_images / current_images.norm(dim=1)[:, None]
+                        old_images = old_images / old_images.norm(dim=1)[:, None]
+                        dist = torch.mm(current_images, old_images.transpose(0, 1))
+                        dist = (1 - dist.mean(dim=1)).cpu().numpy()
+
+                    for j, i in enumerate(idx):
+                        self.w[t][i] = dist[j]
+
+        to_back.backward()
+
+        self.model.train()
         return 0
-
 

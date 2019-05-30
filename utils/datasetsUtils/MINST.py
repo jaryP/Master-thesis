@@ -33,9 +33,6 @@ class MINST(utils.datasetsUtils.dataset.GeneralDatasetLoader):
 
         self.transform = transform
 
-        # if transform is None:
-        #     self.transform = transforms.Compose([transforms.ToTensor()])
-
         self.target_transform = target_transform
 
         self._phase = 'train'
@@ -147,7 +144,7 @@ class MINST(utils.datasetsUtils.dataset.GeneralDatasetLoader):
 
         return parsed
 
-    def load_dataset(self):
+    def load_dataset(self, ):
 
         if self.download:
             self.download_dataset()
@@ -190,9 +187,9 @@ class MINST(utils.datasetsUtils.dataset.GeneralDatasetLoader):
         self._n_tasks = len(self.task2idx)
 
         for t, d in self.task2idx.items():
-            print('task #{} with train {} and test {} images (label: {})'.format(t, len(d['train']['x']),
+            print('task {} with train {} and test {} images (label: {})'.format(t, len(d['train']['x']),
                                                                                  len(d['test']['x']),
-                                                                                 self.idx_to_class[t]))
+                                                                                 0))
 
     def train_test_split(self, task_map):
 
@@ -286,9 +283,12 @@ class PermutedMINST(MINST):
 
 
 class RotatedMINST(MINST):
-    def __init__(self, folder: str, train_split: float = 0.9,
+    def __init__(self, folder: str, train_split: float = 0.9, task_manager=None,
                  transform=None, target_transform=None, download=False,
                  force_download=False, n_rotations=2):
+
+        # if task_manager is None:
+        #     task_manager = DuplicatetNoTask(n_rotations)
 
         super().__init__(folder, DuplicatetNoTask(n_rotations), train_split, transform, target_transform, download, force_download)
         self.angle = []
@@ -305,7 +305,6 @@ class RotatedMINST(MINST):
         t = self.task2idx[task][self._phase]
         img = self.X[t['x'][index]]
         angle = self.angle[task]
-        # img = img[self.permuted_index[task]]
         target = t['y'][index]
 
         img = rotate(img.reshape(28, 28), angle, reshape=False).reshape(-1)
