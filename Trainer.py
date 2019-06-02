@@ -5,7 +5,7 @@ import configs.configClasses as configClasses
 from utils.datasetsUtils.dataset import GeneralDatasetLoader
 import torch.nn.functional as F
 from torch.nn.utils import clip_grad_norm_
-from torch import optim, sum, abs, save, load, nn
+from torch import optim, abs, save, load, nn
 import torch
 from utils.metrics import MetricsHolder, accuracy, f1
 from networks.net_utils import AbstractNetwork
@@ -194,8 +194,6 @@ class Trainer:
 
         for x, y in it:
 
-            # print(torch.cuda.memory_allocated(), torch.cuda.memory_cached())
-
             if self.is_incremental:
                 self.model.task = self.dataset.task_mask(current_task)
             else:
@@ -212,10 +210,11 @@ class Trainer:
             if self.config.L1_REG > 0:
                 l1_loss = 0.0
                 for name, param in self.model.named_parameters():
-                    l1_loss += sum(abs(param))
+                    l1_loss += torch.sum(abs(param))
                 loss = loss + self.config.L1_REG * l1_loss
 
             loss.backward(retain_graph=True)
+            # print('trainer 1', self.model.classification_layer.bias.grad)
 
             if self.cont_learn_tec is not None:
                 if self.dataset.task > 0:
@@ -229,9 +228,10 @@ class Trainer:
                     self.optimizer.zero_grad()
                     loss.backward(retain_graph=True)
 
+            # print('trainer 2', self.model.classification_layer.bias.grad)
+
             clip_grad_norm_(self.model.parameters(), 20)
             self.optimizer.step()
-
             epoch_loss_full += loss.detach().item()
             i += 1
 
@@ -383,7 +383,7 @@ if __name__ == '__main__':
          transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))]
     )
 
-    dataset = CIFAR.Cifar10('./notebooks/data/cifar10', download=True, task_manager=NoTask(),
+    dataset = CIFAR.Cifar10('./notebooks/data/cifar10', download=True, task_manager=IncrementalTaskClassification(2),
                             force_download=False, train_split=0.8, transform=transform, target_transform=None)
     dataset.load_dataset()
 
@@ -402,16 +402,13 @@ if __name__ == '__main__':
     # # net = Kafnet.MultiKAFMLP(len(dataset.class_to_idx), hidden_size=int(400*0.7),# kaf_init_fcn=None,
     # #                          kernels=['gaussian'])
 
-    # net = Kafnet.CNN(10, kernel='softplus', D=10, trainable_dict=False, topology=[64, 'M', 64, 'M'], boundary=4,
-    #                  alpha_mean=0, alpha_std=0.1)
-
     # net = Kafnet.VGG(10, kernel='gaussian', D=10,  boundary=3, init_fcn=None, trainable_dict=True)
 
     config = DefaultConfig()
 
-    # config.DEVICE = 'cpu'
-    config.EPOCHS = 5
-    config.IS_INCREMENTAL = False
+    config.DEVICE = 'cpu'
+    config.EPOCHS = 1
+    config.IS_INCREMENTAL = True
     config.LR = 1e-3
     config.BATCH_SIZE = 32
     # config.EWC_IMPORTANCE = 0.5
@@ -425,10 +422,18 @@ if __name__ == '__main__':
 
     # config.CL_PAR = {'penalty_importance': 1, 'memorized_task_size': 300, 'weights_type': 'usage',
     #                  'sample_size': 50, 'maxf': 0.001, 'c': 2, 'margin': 0.5}
-    config.CL_PAR = {'penalty_importance': 1, 'weights_type': 'distance', 'sample_size': 10, 'distance': 'cosine'}
+    config.CL_PAR = {'penalty_importance': 1, 'weights_type': 'distance', 'sample_size': 20, 'distance': 'cosine',
+                     'supervised': True}
 
-    net = Kafnet.synCNN(10, kernel='softplus', D=15, boundary=3,
-                        alpha_mean=0, alpha_std=0.8, trainable_dict=False, init_fcn=elu)
+    # net = NoKafnet.synCNN(10,  incremental=False)
+
+    # net = Kafnet.CNN(10, kernel='gaussian', D=15, trainable_dict=False, boundary=4, topology=[int(32*0.85),  int(64*0.85)],
+    #                  alpha_mean=0, alpha_std=0.8, init_fcn=None)
+
+    net = Kafnet.synCNN(10, kernel='softplus', D=10, boundary=3, trainable_dict=False,
+                        topology=[int(32*0.9),  int(64*0.9)])
+
+    print(sum([torch.numel(p) for p in net.parameters()]))
 
     for n, p in net.named_parameters():
         print(n, p.size())
@@ -437,8 +442,7 @@ if __name__ == '__main__':
     # net = Kafnet.VGG(10, kernel='gaussian', trainable_dict=False)
 
     print(config)
-    trainer = Trainer(net, dataset, config, pretrained_model='/media/jary/DATA/Uni/tesi/codice/'
-                                                           'notebooks/cifar10/models/completi/nokaf')
+    trainer = Trainer(net, dataset, config)
 
     # print(trainer.model.state_dict().keys())
     # for k, v in trainer.model.state_dict().items():

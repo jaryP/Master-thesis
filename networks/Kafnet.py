@@ -231,12 +231,16 @@ class synCNN(AbstractNetwork):
         #                                          nn.Dropout(0.5)
         #                                          )
 
-        self.classification_layer = nn.Linear(2304, self.output_size)
+        self.classification_layer = None
+        # self.classification_layer = nn.Linear(1584, self.output_size)
 
     def forward(self, x):
         x = self.features(x)
         x = x.view(x.size(0), -1)
         # x = self.features_processing(x)
+        if self.classification_layer is None:
+            self.classification_layer = nn.Linear(x.size()[1], self.output_size).to(x.device)
+
         x = self.classification_layer(x)
 
         mask = np.zeros(self.output_size)
@@ -256,6 +260,9 @@ class synCNN(AbstractNetwork):
         x = self.features(x)
         x = x.view(x.size(0), -1)
         # x = self.features_processing(x)
+        if self.classification_layer is None:
+            self.classification_layer = nn.Linear(x.size()[1], self.output_size).to(x.device)
+
         x = self.classification_layer(x)
 
         mask = np.zeros(self.output_size)

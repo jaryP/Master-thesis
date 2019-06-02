@@ -189,7 +189,15 @@ class KAF(nn.Module):
             sigma = 2 * interval
             self.gamma_init = 0.5 / np.square(sigma)
             if not hasattr(KAF, 'gamma'):
-                setattr(KAF, 'gamma', torch.tensor(self.gamma_init))
+
+                gamma_init = torch.tensor(self.gamma_init)
+
+                if is_conv:
+                    gamma_init = gamma_init.repeat(1, 1, 1, 1, self.D)
+                else:
+                    gamma_init = gamma_init.repeat(1, 1, self.D)
+
+                setattr(KAF, 'gamma', gamma_init)
 
             self.kernel, self.kernel_init = gaussian_kernel(self)
         elif kernel == 'relu':
@@ -243,8 +251,7 @@ class KAF(nn.Module):
             normal_(self.alpha.data, mean=self.alpha_mean, std=self.alpha_std)
 
     def forward(self, x):
-        x = self.kernel(self, x) * self.alpha
-        x = torch.sum(x, self.unsqueeze_dim)
+        x = torch.sum(torch.mul(self.kernel(self, x), self.alpha), self.unsqueeze_dim)
         return x
 
     def __repr__(self):
