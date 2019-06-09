@@ -6,7 +6,7 @@ from networks.continual_learning_beta import embedding
 class DefaultConfig(object):
     LR = 0.001
     L1_REG = 0
-    IS_INCREMENTAL = False
+    IS_INCREMENTAL = True
 
     ITERS = 1
     EPOCHS = 2

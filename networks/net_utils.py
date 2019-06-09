@@ -100,7 +100,7 @@ class AbstractNetwork(ABC, nn.Module):
         super().__init__()
         self.output_size = outputs
         self._task = 0
-        self._used_tasks = set()
+        self.used_tasks = set()
 
     @abstractmethod
     def build_net(self):

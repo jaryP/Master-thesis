@@ -734,12 +734,14 @@ class embedding(object):
         self.incremental = config.IS_INCREMENTAL
         self.handle = None
 
-        self.sample_size = config.CL_PAR.get('sample_size', 50)
+        self.sample_size = config.CL_PAR.get('sample_size', 25)
         self.memorized_task_size = config.CL_PAR.get('memorized_task_size', 300)
         self.importance = config.CL_PAR.get('penalty_importance', 1)
         self.c = config.CL_PAR.get('c', 1)
         self.distance = config.CL_PAR.get('distance', 'euclidean')
         self.supervised = config.CL_PAR.get('supervised', True)
+        self.normalize = config.CL_PAR.get('normalize', True)
+        self.mul = config.CL_PAR.get('normalize', 1)
 
         self.online = config.CL_PAR.get('online', False)
         self.memory_size = config.CL_PAR.get('memory_size', -1)
@@ -832,24 +834,10 @@ class embedding(object):
 
         return self, penalty
 
-    @staticmethod
-    def layer_freeze(mask):
-        def f(module, grad_input, grad_output):
-            # print(grad_input.grad)
-            # print('layer', grad_input[0], mask)
-            grad_input[0].mul_(mask)
-            # print(grad_input[1].size())
-            # print(grad_input[2].size())
-            # print(grad_input[2])
-            # print(list(module.parameters()))
-            # for i in module.parameters():
-            #     print(i.grad.max())
-            pass
-        return f
-
     def embedding_save(self, current_task):
 
         if current_task-1 not in self.tasks:
+            self.importance *= self.mul
             self.first_batch = True
             self.tasks.add(current_task-1)
 
@@ -883,8 +871,10 @@ class embedding(object):
                     if self.external_embedding_layer is not None:
                         output = self.external_embedding_layer(output)
 
+                    if self.normalize:
+                        output = F.normalize(output, p=2, dim=1)
+
                     embeddings = output.cpu()
-                    embeddings = F.normalize(embeddings, p=2, dim=1)
 
                     if embs is None:
                         embs = embeddings
@@ -895,12 +885,18 @@ class embedding(object):
                     self.embeddings[current_task-1] = embs.cpu()
                     self.embeddings_images[current_task-1] = images.cpu()
 
-                    w = [1] * self.memorized_task_size
+                    c = 1
+                    # if self.weights_type is not None:
+                    #     if self.weights_type == 'distance':
+                    #         c = 0.1
+
+                    w = [c] * self.memorized_task_size
 
                     for t in self.w.keys():
                         self.w[t] = deepcopy(w)
 
                     self.w[current_task-1] = deepcopy(w)
+
                 else:
                     if len(self.embeddings) == 0:
                         self.embeddings[0] = embs.cpu()
@@ -910,7 +906,12 @@ class embedding(object):
                         self.embeddings[0] = torch.cat((self.embeddings[0], embs.cpu()), 0)
                         self.embeddings_images[0] = torch.cat((self.embeddings_images[0], images.cpu()), 0)
 
-                    self.w[0] = [1] * self.embeddings[0].size()[0]
+                    c = 1
+                    # if self.weights_type is not None:
+                    #     if self.weights_type == 'distance':
+                    #         c = 0.1
+
+                    self.w[0] = [c] * self.embeddings[0].size()[0]
 
                 # if self.embeddings is None or self.online:
                 #     self.embeddings = embeddings
@@ -932,12 +933,12 @@ class embedding(object):
     def embedding_drive(self, current_batch):
         self.model.eval()
 
-        to_back = None
-
         for t in self.embeddings:
+
+            to_back = None
+
             w = self.w[t]
 
-            # idx = range(self.embeddings_images.size()[0])
             idx = range(len(w))
 
             # w = self.w
@@ -945,7 +946,12 @@ class embedding(object):
                 # ws = np.sum(self.w)
                 w = [1/wc for wc in w]
 
-            idx = random.choices(idx, k=self.sample_size, weights=w)
+            if self.supervised:
+                ss = self.sample_size
+            else:
+                ss = self.sample_size * len(self.tasks)
+
+            idx = random.choices(idx, k=ss, weights=w)
 
             for i in idx:
                 img = self.embeddings_images[t][i].unsqueeze(0).to(self.device)
@@ -955,15 +961,10 @@ class embedding(object):
                 if self.external_embedding_layer is not None:
                     new_embeddings = self.external_embedding_layer(new_embeddings)
 
-                new_embeddings = F.normalize(new_embeddings, p=2, dim=1).cpu()
+                if self.normalize:
+                    new_embeddings = F.normalize(new_embeddings, p=2, dim=1)
 
-                # d = torch.bmm(embeddings.unsqueeze(1), new_embeddings.unsqueeze(-1))
-
-                # x = embeddings / embeddings.norm(dim=1)[:, None]
-                # y = new_embeddings / new_embeddings.norm(dim=1)[:, None]
-                # dist = torch.mm(x, y.transpose(0, 1))
-                # cosine = torch.nn.functional.cosine_similarity(embeddings, new_embeddings)
-                # dist = 1-cosine
+                new_embeddings = new_embeddings.cpu()
 
                 if self.distance == 'euclidean':
                     dist = (embeddings - new_embeddings).norm(p=None, dim=1)
@@ -971,22 +972,13 @@ class embedding(object):
                     cosine = torch.nn.functional.cosine_similarity(embeddings, new_embeddings)
                     dist = 1-cosine
 
-                # dist = (embeddings - new_embeddings).norm(p=None, dim=1)
-
-                # print(dist.mean(), end=' ')
-
-                # distb = dist.mean() * self.importance
-                # to_back += dis]
                 if to_back is None:
                     to_back = dist
                 else:
                     to_back = torch.cat((to_back, dist), 0)
 
-                # print(dist, distb)
-                # print(distb, torch.log(distb))
-                # to_back += distb.to(self.device)
-                # distb = -torch.log(dist.mean()) * self.importance
-                # distb.backward()
+                # dist = dist.mean() * self.importance
+                # dist.backward()
 
                 if self.weights_type is not None:
                     if self.weights_type == 'distance':
@@ -1011,9 +1003,13 @@ class embedding(object):
                         # for j, i in enumerate(idx):
                         self.w[t][i] = dist
 
-        to_back = to_back.mean() * self.importance
-        to_back.backward()
+            to_back = to_back.mean() * self.importance
+            # print(to_back, torch.log(to_back))
+            to_back.backward()
+            # l = torch.log(-to_back)
+            # l.backward()
 
         self.model.train()
         return 0
+
 

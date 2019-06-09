@@ -245,7 +245,7 @@ class synCNN(AbstractNetwork):
 
         mask = np.zeros(self.output_size)
         if self.incremental:
-            for i in self._used_tasks:
+            for i in self.used_tasks:
                 mask[i] = 1
         else:
             if isinstance(self._task, (list, tuple, set)):

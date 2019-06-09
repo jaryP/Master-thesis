@@ -71,7 +71,7 @@ class Trainer:
         for e in range(self.config.EPOCHS):
             loss = self.epoch(e)
             losses.append(loss)
-            self.evaluate()
+            self.evaluate(task)
 
         if self.save_modality >= 1:
             state = {'metrics': self.metrics_calculator.metrics, 'losses': losses,
@@ -112,8 +112,16 @@ class Trainer:
 
             if self.is_incremental:
                 self.model.task = self.dataset.task_mask(current_task)
+                self.model.used_tasks.update(set(self.dataset.task_mask(current_task)))
             else:
                 self.model.task = current_task
+                self.model.used_tasks.add(current_task)
+
+            # if self.is_incremental:
+            #     pass
+            #     # self.model.task = self.dataset.task_mask(current_task)
+            # else:
+            #     pass
 
             for e in range(self.epochs_n):
                 loss = self.epoch(e)
@@ -125,8 +133,8 @@ class Trainer:
                     for sub_task in range(current_task):
                         self.evaluate(current_task, sub_task)
 
-                for t, v in self.metrics_calculator.metrics['tasks'].items():
-                    print(t, v['accuracy'])
+                # for t, v in self.metrics_calculator.metrics['tasks'].items():
+                #     print(t, v['accuracy'])
 
                 self.dataset.task = current_task
 
@@ -171,17 +179,6 @@ class Trainer:
 
         i = 0
         epoch_loss_full = 0
-
-        if self.is_incremental:
-            # self.model.task = self.dataset.task_mask(current_task)
-            self.model._used_tasks.update(set(self.dataset.task_mask(current_task)))
-        else:
-            self.model._used_tasks.add(current_task)
-
-        # if isinstance(value, (list, tuple, set)):
-        #     self._used_tasks.update(set(value))
-        # else:
-        #     self._used_tasks.add(value)
 
         it = tqdm(self.dataset.getIterator(self.config.BATCH_SIZE), total=len(self.dataset)//self.config.BATCH_SIZE,
                   disable=not self.verbose)
@@ -383,7 +380,7 @@ if __name__ == '__main__':
          transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))]
     )
 
-    dataset = CIFAR.Cifar10('./notebooks/data/cifar10', download=True, task_manager=IncrementalTaskClassification(2),
+    dataset = CIFAR.Cifar100('./notebooks/data/cifar100', download=True, task_manager=IncrementalTaskClassification(10),
                             force_download=False, train_split=0.8, transform=transform, target_transform=None)
     dataset.load_dataset()
 
@@ -406,14 +403,14 @@ if __name__ == '__main__':
 
     config = DefaultConfig()
 
-    config.DEVICE = 'cpu'
-    config.EPOCHS = 1
+    # config.DEVICE = 'cpu'
+    config.EPOCHS = 10
     config.IS_INCREMENTAL = True
-    config.LR = 1e-3
+    config.LR = 1e-1
     config.BATCH_SIZE = 32
     # config.EWC_IMPORTANCE = 0.5
     # config.EWC_SAMPLE_SIZE = 100
-    config.OPTIMIZER = 'Adam'
+    # config.OPTIMIZER = 'Adam'
     config.CL_TEC = embedding
     config.USE_CL = True
 
@@ -422,16 +419,17 @@ if __name__ == '__main__':
 
     # config.CL_PAR = {'penalty_importance': 1, 'memorized_task_size': 300, 'weights_type': 'usage',
     #                  'sample_size': 50, 'maxf': 0.001, 'c': 2, 'margin': 0.5}
-    config.CL_PAR = {'penalty_importance': 1, 'weights_type': 'distance', 'sample_size': 20, 'distance': 'cosine',
+
+    config.CL_PAR = {'penalty_importance': 8, 'weights_type': 'distance', 'sample_size': 20, 'distance': 'cosine',
                      'supervised': True}
 
-    # net = NoKafnet.synCNN(10,  incremental=False)
+    net = NoKafnet.synCNN(100,  incremental=False)
 
     # net = Kafnet.CNN(10, kernel='gaussian', D=15, trainable_dict=False, boundary=4, topology=[int(32*0.85),  int(64*0.85)],
     #                  alpha_mean=0, alpha_std=0.8, init_fcn=None)
 
-    net = Kafnet.synCNN(10, kernel='softplus', D=10, boundary=3, trainable_dict=False,
-                        topology=[int(32*0.9),  int(64*0.9)])
+    # net = Kafnet.synCNN(10, kernel='softplus', D=10, boundary=3, trainable_dict=False,
+    #                     topology=[int(32*0.9),  int(64*0.9)])
 
     print(sum([torch.numel(p) for p in net.parameters()]))
 
@@ -453,16 +451,14 @@ if __name__ == '__main__':
     # print(trainer.evaluate_on_dataset(dataset, 0, 0))
 
     a = trainer.all_tasks()
-    b = trainer.evaluate_on_dataset(d)
-    print(b)
+    # b = trainer.evaluate_on_dataset(d)
+    # print(b)
 
     for k, v in a['tasks'].items():
         print(k, v['f1'])
         print('\t', v['accuracy'])
 
     print(a['metrics'])
-
-
 
     # dataset.load_dataset()
     # net = NoKafnet.VGG()
